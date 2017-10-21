@@ -10,30 +10,15 @@
 #include <pthread.h>    // thread functions
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/time.h>
 
 #include "webserver.h"
 
-#define LISTEN_SYSCALL_BACKLOG      (5)     /* Max length of pending connections queued up by the kernel */
-#define HTTP_REQ_MSG_MAX_LEN        (1024)  /* Max length of an HTTP request message */
-#define PRINT_DEBUG_MESSAGES        (1)
-#define TRANSFER_SIZE               (1024)
-
-//#define HTTP_SEND_ONLY_STATUSLINE   (1)
-
-#define HTTP_RSP_SP                 " "
-#define HTTP_RSP_CRLF               "\n\n"
-#define HTTP_RSP_LF                 "\n"
-
-char serverDefaultDocRoot[] = "/Users/pavandhareshwar/Sites/www";
+char serverDefaultDocRoot[] = "/Users/pavandhareshwar/NSWebServer/www";
 ws_conf_params serverConfigParams;
-static int childProcessCount = 0;
 
-static void handleConnRequest(int connId, bool *connKeepAlive);
-static void handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgParams);
-static int fillServerConfigParams(ws_conf_params *serverConfigParams);
-static void getContentType(char *fileName, char *contentType);
-static void getContentLength(char *fileName, int *contentLength);
-static void sendBadRequestResponse(int connId, http_req_msg_params clientHttpReqMsgParams);
+struct timeval start;
+struct timeval now;
 
 int main(int argc, char const *argv[])
 {
@@ -41,6 +26,7 @@ int main(int argc, char const *argv[])
     struct sockaddr_in serverSockAddr;
     /*  Server socket */
     int serverSock = -1;
+    static int acceptedConnCount = 0;
 
     /*  Create a TCP server socket */
     serverSock = socket(AF_INET, /* socket_family = IPv4 */
@@ -66,6 +52,7 @@ int main(int argc, char const *argv[])
     serverDefaultConfigParams.serverPortNum = 8888;
     strcpy((char *)serverDefaultConfigParams.serverDocumentRoot, serverDefaultDocRoot);
     serverDefaultConfigParams.serverKeepAliveTime = 0;
+    strcpy((char *)serverDefaultConfigParams.serverIndexFile, "index.html");
 
     memset(&serverConfigParams, 0, sizeof(ws_conf_params));
 
@@ -80,13 +67,11 @@ int main(int argc, char const *argv[])
     if (len > 0 && serverConfigParams.serverDocumentRoot[len-1] == '\n')
         serverConfigParams.serverDocumentRoot[--len] = '\0';
 
-    //if (printTheseMessages)
-    {
-        printf("Server configuration : \n");
-        printf("Port : %d\n", serverConfigParams.serverPortNum);
-        printf("Document Root : %s\n", serverConfigParams.serverDocumentRoot);
-        printf("Keep-Alive Time : %d\n", serverConfigParams.serverKeepAliveTime);
-    }
+    printf("Server configuration: \n");
+    printf("Port: %d\n", serverConfigParams.serverPortNum);
+    printf("Document Root: %s\n", serverConfigParams.serverDocumentRoot);
+    printf("Keep-Alive Time: %d\n", serverConfigParams.serverKeepAliveTime);
+    printf("Index Files: %s\n", serverConfigParams.serverIndexFile);
 
     memset(&serverSockAddr, 0, sizeof(serverSockAddr));
 
@@ -115,7 +100,9 @@ int main(int argc, char const *argv[])
             LISTEN_SYSCALL_BACKLOG /* maximum pending connection queued up */);
 
     printf("Waiting for incoming connections...\n");
-
+    
+    bool connKeepAlive = false;
+    
     /* Server runs in an infinite loop listening for connections on its socket */
     while (1)
     {
@@ -124,7 +111,6 @@ int main(int argc, char const *argv[])
         /* Client socket */
         int clientSock = -1;
         socklen_t clientAddrLen = -1;
-        bool connKeepAlive = false;
         pid_t child_pid;
 
         clientAddrLen = sizeof(clientSockAddr);
@@ -137,41 +123,47 @@ int main(int argc, char const *argv[])
             printf("Accept failed\n");
             exit(1);
         }
-
+        else
+        {
+            printf("Accept success, clientSock : %d\n", clientSock);
+            acceptedConnCount++;
+        }
+        
         /*  Using the multiprocess approach here -
             Creating a new process for every accepted connection */
         child_pid = fork();
-
+        
         if (child_pid == 0)
         {
-            childProcessCount++;
-            //printf("Spawned child processes [%d]\n", childProcessCount);
+            printf("Created a child process for a new accepted connection [%d]\n", acceptedConnCount);
             /* Child process */
+            /* Close the parent socket in the child process because we want
+               the child process to handle the connection request and not
+               listen for any connection requests.
+             */
             close(serverSock);
             /* Handle the request from the accepted connection */
-            handleConnRequest(clientSock, &connKeepAlive);
-
+            int retVal = handleConnRequest(clientSock, &connKeepAlive);
+            if (retVal != 0)
+            {
+                printf("Handle Connection Request Failed\n");
+            }
+            
             /* Persistent Connection*/
             /*  Once the request has been handled and the response has been sent,
                 we have to check if the parameter 'connKeepAlive' from handleConnRequest
                 function is true (this means there is a 'Connection: Keep Alive'
                 in the HTTP request message from the client */
-            //if (!connKeepAlive)
-            {
-                /* Close the connection */
-                close(clientSock);
-                /* Kill the child process */
-                //printf("Killed child processes [%d]\n", childProcessCount--);
-                exit(0);
-            }
-            //else
-            //{
-            //    printf("connKeepAlive is set. Not closing the clientSock\n");
-            //}
+            
+            /* Kill the child process */
+            exit(0);
         }
         else if (child_pid > 0)
         {
             /* Parent process */
+            /* We close the child socket here, because we don't want the parent
+               process to receive HTTP request message on the client socket
+             */
             close(clientSock);
         }
         else
@@ -185,7 +177,6 @@ int main(int argc, char const *argv[])
 
 static int fillServerConfigParams(ws_conf_params *serverConfigParams)
 {
-    //FILE *fp = fopen("/Users/pavandhareshwar/UC_Boulder/2-1/Network Systems/Assignments/Assignment2/Codes/webserver/ws.conf", "r");
     FILE *fp = fopen("ws.conf", "r");
     int retVal = -1;
 
@@ -194,7 +185,6 @@ static int fillServerConfigParams(ws_conf_params *serverConfigParams)
     char spaceDelimiter[] = " ";
     char colonDelimiter[] = ":";
     ssize_t bytesRead;
-    system("pwd");
 
     buffer = (char *)malloc(numBytes*sizeof(char));
 
@@ -217,13 +207,23 @@ static int fillServerConfigParams(ws_conf_params *serverConfigParams)
             }
             else if (strcmp(token, "Keep-Alive") == 0)
             {
-                printf("token : %s\n", token);
+                //printf("token : %s\n", token);
                 token = strtok(NULL, colonDelimiter);
                 char *token2 = strtok(token, "=");
                 if (strcmp(token2, "timeout") == 0)
                 {
                     token2 = strtok(NULL, "=");
                     serverConfigParams->serverKeepAliveTime = atoi(token2);
+                }
+            }
+            else if (strcmp(token, "DirectoryIndex") == 0)
+            {
+                char *serverIndexFilePtr = &serverConfigParams->serverIndexFile[0];
+                while ((token = strtok(NULL, spaceDelimiter)) != NULL)
+                {
+                    strcpy(serverIndexFilePtr, token);
+                    serverIndexFilePtr += strlen(token);
+                    strcpy(serverIndexFilePtr++, " ");
                 }
             }
             else
@@ -239,10 +239,11 @@ static int fillServerConfigParams(ws_conf_params *serverConfigParams)
     return retVal;
 }
 
-static void handleConnRequest(int connId, bool *connKeepAlive)
+static int handleConnRequest(int connId, bool *connKeepAlive)
 {
     char httpReqMsgBuffer[HTTP_REQ_MSG_MAX_LEN]; /* */
     ssize_t bytes_read = -1; /* Bytes successfully read */
+    int retVal = -1;
 
     /*  TODO : Add error handling
         The following error codes need to be handled
@@ -256,6 +257,11 @@ static void handleConnRequest(int connId, bool *connKeepAlive)
                     (sizeof(httpReqMsgBuffer)-1) /* size of buffer */);
     if (bytes_read > 0)
     {
+        //printf("HTTP request message read from client socket %d. Resetting timers\n", connId);
+        gettimeofday(&start, NULL);
+        gettimeofday(&now, NULL);
+        
+        bool isHttpReqLineValid = false;
         http_req_msg_params clientHttpReqMsgParams;
 
         memset(&clientHttpReqMsgParams, 0, sizeof(clientHttpReqMsgParams));
@@ -283,103 +289,89 @@ static void handleConnRequest(int connId, bool *connKeepAlive)
         /*  The first line of the client's HTTP request will be of the
             form above containing the request method, URI and version
         */
-        printf("HTTP request message :\n");
-        printf("%s\n", httpReqMsgBuffer);
-        sscanf(httpReqMsgBuffer, "%s %s %s", clientHttpReqMsgParams.httpReqMethod,
-               clientHttpReqMsgParams.httpReqUri, clientHttpReqMsgParams.httpReqVersion);
-
-#if 0
-        if (printTheseMessages)
-        {
-            printf("HTTP Request Parameters: \n");
-            printf("HTTP Request Method : %s\n", clientHttpReqMsgparams.httpReqMethod);
-            printf("HTTP Request URI : %s\n", clientHttpReqMsgparams.httpReqUri);
-            printf("HTTP Request Version : %s\n", clientHttpReqMsgparams.httpReqVersion);
-        }
-#endif
-
-#if 1
-        /*  TODO : parse the http request message for 'Connection' field and
-            if it says 'Keep-Alive', then the server should keep the connection
-            open for 'Keep-Alive time' specified in the ws.conf file.
-        */
-        /*  We have to continue reading until we get '\r\n\r\n' (HTTP specifies
-            CR/LF as the line delimiter.
-        */
-
+        
+        PRINT_DEBUG_MESSAGE("HTTP request message :\n");
+        PRINT_DEBUG_MESSAGE("%s\n", httpReqMsgBuffer);
+        
         char httpReqMsgBufferCopy[HTTP_REQ_MSG_MAX_LEN];
         strcpy(httpReqMsgBufferCopy, httpReqMsgBuffer);
-
-        char *token = strtok(httpReqMsgBuffer, "\r\n");
-        while (token != NULL)
+        
+        char *reqLineToken = strtok(httpReqMsgBufferCopy, "\r\n");
+        
+        extractAndCheckHttpReqMsgParams(connId, reqLineToken, &clientHttpReqMsgParams, &isHttpReqLineValid);
+        if (isHttpReqLineValid)
         {
-            //printf("Token : %s\n", token);
-            token = strtok(NULL, "\r\n");
-
-            char *subStr = NULL;
-            if ((subStr = strstr(token, "Connection")) != NULL)
+            /*  We have to continue reading until we get '\r\n\r\n' (HTTP specifies
+                CR/LF as the line delimiter.
+             */
+            
+            PRINT_DEBUG_MESSAGE("HTTP Request Parameters: \n");
+            PRINT_DEBUG_MESSAGE("HTTP Request Method : %s\n", clientHttpReqMsgParams.httpReqMethod);
+            PRINT_DEBUG_MESSAGE("HTTP Request URI : %s\n", clientHttpReqMsgParams.httpReqUri);
+            PRINT_DEBUG_MESSAGE("HTTP Request Version : %s\n", clientHttpReqMsgParams.httpReqVersion);
+            
+            char httpReqMsgBufferCopy2[HTTP_REQ_MSG_MAX_LEN];
+            strcpy(httpReqMsgBufferCopy2, httpReqMsgBuffer);
+            
+            char httpReqMsgBufferCopy3[HTTP_REQ_MSG_MAX_LEN];
+            strcpy(httpReqMsgBufferCopy3, httpReqMsgBuffer);
+            
+            char *token = strtok(httpReqMsgBuffer, "\r\n");
+            while (token != NULL)
             {
-                //printf("subStr : %s\n", subStr);
-                char *token2 = strtok(subStr, ":");
-                token2 = strtok(NULL, ":");
-                //printf("Connection Field : %s\n", token2);
-                if (false == *connKeepAlive)
+                //printf("Token : %s\n", token);
+                token = strtok(NULL, "\r\n");
+                
+                char *subStr = NULL;
+                if ((subStr = strstr(token, "Connection")) != NULL)
                 {
-                    *connKeepAlive = true;
+                    //printf("subStr : %s\n", subStr);
+                    char *token2 = strtok(subStr, ":");
+                    token2 = strtok(NULL, ":");
+                    //printf("Connection Field : %s\n", token2);
+                    if (false == *connKeepAlive)
+                    {
+                        *connKeepAlive = true;
+                    }
+                    break;
                 }
-                break;
             }
-        }
-
-        char *tok = strtok(httpReqMsgBufferCopy, "\r\n");
-        while (tok != NULL)
-        {
-            tok = strtok(NULL, "\r\n");
-
-            char *subStr = NULL;
-            if ((subStr = strstr(tok, "Accept:")) != NULL)
+            
+            char *tok = strtok(httpReqMsgBufferCopy2, "\r\n");
+            while (tok != NULL)
             {
-                //printf("subStr : %s\n", subStr);
-                break;
+                tok = strtok(NULL, "\r\n");
+                
+                char *subStr = NULL;
+                if ((subStr = strstr(tok, "Accept:")) != NULL)
+                {
+                    //printf("subStr : %s\n", subStr);
+                    break;
+                }
+            }
+            PRINT_DEBUG_MESSAGE("--------------------------\n");
+            
+            //while (strstr (httpReqMsgBuffer, "\r\n\r\n") == NULL)
+            //    bytes_read = read(connId, httpReqMsgBuffer, sizeof(httpReqMsgBuffer));
+            
+            if (strcmp(clientHttpReqMsgParams.httpReqMethod, "GET") == 0)
+            {
+                /* Handle GET request */
+                retVal = handleGetRequest(connId, clientHttpReqMsgParams);
+            }
+            else if (strcmp(clientHttpReqMsgParams.httpReqMethod, "POST") == 0)
+            {
+                /* Handle POST request */
+                retVal = handlePostRequest(connId, clientHttpReqMsgParams, httpReqMsgBufferCopy3);
+            }
+            else
+            {
+                /* Do Nothing */
             }
         }
-        printf("--------------------------\n");
-#else
-        while (strstr (httpReqMsgBuffer, "\r\n\r\n") == NULL)
-            bytes_read = read(connId, httpReqMsgBuffer, sizeof(httpReqMsgBuffer));
-#endif
-
-        /* Check the HTTP request params extracted to check for incompetencies */
-        if ((strcmp(clientHttpReqMsgParams.httpReqVersion, "HTTP/1.0") != 0) &&
-            (strcmp(clientHttpReqMsgParams.httpReqVersion, "HTTP/1.1") != 0))
+        else
         {
-            /*  The webserver supports only HTTP request version 1.0 and 1.1
-                Sending an HTTP response with unsupported HTTP request version
-            */
-            printf("HTTP version not supported\n");
-            sendBadRequestResponse(connId, clientHttpReqMsgParams);
-        }
-
-        if ((strcmp(clientHttpReqMsgParams.httpReqMethod, "GET") != 0) &&
-            (strcmp(clientHttpReqMsgParams.httpReqMethod, "POST") != 0) &&
-            (strcmp(clientHttpReqMsgParams.httpReqMethod, "HEAD") != 0) &&
-            (strcmp(clientHttpReqMsgParams.httpReqMethod, "PUT") != 0) &&
-            (strcmp(clientHttpReqMsgParams.httpReqMethod, "DELETE") != 0) &&
-            (strcmp(clientHttpReqMsgParams.httpReqMethod, "CONNECT") != 0) &&
-            (strcmp(clientHttpReqMsgParams.httpReqMethod, "OPTIONS") != 0) &&
-            (strcmp(clientHttpReqMsgParams.httpReqMethod, "TRACE") != 0))
-        {
-            /*  The webserver supports only GET method. Sending an HTTP response
-                with unsupported HTTP request method
-            */
-            printf("HTTP method not supported\n");
-            sendBadRequestResponse(connId, clientHttpReqMsgParams);
-        }
-
-        if (strcmp(clientHttpReqMsgParams.httpReqMethod, "GET") == 0)
-        {
-            /* Handle GET request */
-            handleGetRequest(connId, clientHttpReqMsgParams);
+            printf("HTTP request line invalid\n");
         }
     }
     else if (bytes_read == 0)
@@ -391,10 +383,96 @@ static void handleConnRequest(int connId, bool *connKeepAlive)
         /* read system call failed */
         printf("Read system call failed, %s\n", strerror(errno));
     }
+    return retVal;
 }
 
-static void handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgParams)
+static void extractAndCheckHttpReqMsgParams(int connId, char *reqLineToken,
+                                            http_req_msg_params *clientHttpReqMsgParams, bool *isValid)
 {
+    char spaceDelimiter[] = " ";
+    *isValid = true;
+    
+    /* Extract the HTTP method, URL and version field */
+    char *token = strtok(reqLineToken, spaceDelimiter);
+    if (token != NULL)
+    {
+        strcpy(clientHttpReqMsgParams->httpReqMethod, token);
+    }
+    
+    token = strtok(NULL, spaceDelimiter);
+    if (token != NULL)
+    {
+        strcpy(clientHttpReqMsgParams->httpReqUri, token);
+    }
+    
+    token = strtok(NULL, spaceDelimiter);
+    if (token != NULL)
+    {
+        strcpy(clientHttpReqMsgParams->httpReqVersion, token);
+    }
+    
+    /* Check the HTTP request params extracted to check for incompetencies */
+    if ((strcmp(clientHttpReqMsgParams->httpReqMethod, "GET") != 0) &&
+        (strcmp(clientHttpReqMsgParams->httpReqMethod, "POST") != 0) &&
+        (strcmp(clientHttpReqMsgParams->httpReqMethod, "HEAD") != 0) &&
+        (strcmp(clientHttpReqMsgParams->httpReqMethod, "PUT") != 0) &&
+        (strcmp(clientHttpReqMsgParams->httpReqMethod, "DELETE") != 0) &&
+        (strcmp(clientHttpReqMsgParams->httpReqMethod, "CONNECT") != 0) &&
+        (strcmp(clientHttpReqMsgParams->httpReqMethod, "OPTIONS") != 0) &&
+        (strcmp(clientHttpReqMsgParams->httpReqMethod, "TRACE") != 0))
+    {
+        /*  The webserver supports only GET method. Sending an HTTP response
+         with unsupported HTTP request method
+         */
+        printf("HTTP method not supported\n");
+        sendBadRequestResponse(connId, clientHttpReqMsgParams);
+    }
+    
+    if ((strcmp(clientHttpReqMsgParams->httpReqVersion, "HTTP/1.0") != 0) &&
+        (strcmp(clientHttpReqMsgParams->httpReqVersion, "HTTP/1.1") != 0))
+    {
+        /*  The webserver supports only HTTP request version 1.0 and 1.1
+         Sending an HTTP response with unsupported HTTP request version
+         */
+        printf("HTTP version not supported\n");
+        sendBadRequestResponse(connId, clientHttpReqMsgParams);
+        *isValid = false;
+        return;
+    }
+    
+    /*  This is a scenario where the URL field is missing and the http
+        version field gets extracted into the URL field
+     */
+    if ((strcmp(clientHttpReqMsgParams->httpReqUri, "HTTP/1.0") == 0) ||
+        (strcmp(clientHttpReqMsgParams->httpReqUri, "HTTP/1.1") == 0))
+    {
+        /*  The webserver supports only HTTP request version 1.0 and 1.1
+         Sending an HTTP response with unsupported HTTP request version
+         */
+        printf("HTTP URL field missing\n");
+        sendBadRequestResponse(connId, clientHttpReqMsgParams);
+        *isValid = false;
+        return;
+    }
+    
+    if ((strcmp(clientHttpReqMsgParams->httpReqMethod, "GET") != 0) &&
+        (strcmp(clientHttpReqMsgParams->httpReqMethod, "POST") != 0))
+    {
+        /*  The webserver supports only GET and POST methods. Sending an
+         HTTP response with unsupported HTTP request method
+         */
+        printf("HTTP method not supported\n");
+        sendNotImplementedResponse(connId, clientHttpReqMsgParams);
+        *isValid = false;
+        return;
+    }
+    
+    return;
+}
+
+static int handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgParams)
+{
+    int retVal = -1;
     /*  Process the HTTP GET request and send appropriate response back to
         the client
     */
@@ -413,19 +491,16 @@ static void handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgPar
             TODO : The default web page and document root directory should be
             searched in the server configuration file.
         */
-        //sprintf(path, "%s%c%s", "/Users/pavandhareshwar/Sites/www", '/', "index.html");
         sprintf(path, "%s%s", (char *)serverConfigParams.serverDocumentRoot, "/index.html");
         isFileIndexHtml = true;
     }
     else
     {
-        //printf ("Request Uri : %s\n", clientHttpReqMsgParams.httpReqUri);
-        //sprintf(path, "%s%c%s", "/Users/pavandhareshwar/Sites/www", '/', file);
         sprintf(path, "%s%s", (char *)serverConfigParams.serverDocumentRoot, clientHttpReqMsgParams.httpReqUri);
         isFileIndexHtml = false;
     }
 
-    //printf("Path : %s\n", path);
+    PRINT_DEBUG_MESSAGE("Path : %s\n", path);
     /*  TODO : The HTTP response has the following lines
         Status-Line : HTTP-Version SP Status-Code SP Reason-Phrase CRLF
             Example : HTTP/1.1 200 OK
@@ -444,10 +519,11 @@ static void handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgPar
     */
     if ((fileDesc = open(path, O_RDONLY)) != -1 )
 	{
-        //send(connId, "HTTP/1.0 200 OK\n\n", 17, 0);
         if (true == isFileIndexHtml)
         {
+            PRINT_DEBUG_MESSAGE("Sending index file contents : %s\n", path);
             printf("Sending index file contents : %s\n", path);
+            
             /* Status-Line */
             char statusLine[100];
             sprintf(statusLine, "%s%s%d%s%s%s", clientHttpReqMsgParams.httpReqVersion,
@@ -458,10 +534,13 @@ static void handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgPar
     		while ( (bytes_read=read(fileDesc, dataBuffer, TRANSFER_SIZE))>0 )
     			write(connId, dataBuffer, bytes_read);
 
+            PRINT_DEBUG_MESSAGE("Sent index file contents\n");
             printf("Sent index file contents\n");
+            isFileIndexHtml = false;
         }
         else
         {
+            PRINT_DEBUG_MESSAGE("Sending requested file contents : %s\n", path);
             printf("Sending requested file contents : %s\n", path);
             /* Status-Line */
             char statusLine[100];
@@ -477,13 +556,10 @@ static void handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgPar
             /* Content-Type */
             char contentType[100];
             getContentType(clientHttpReqMsgParams.httpReqUri, contentType);
-            //printf("Content-Type : %s for file : %s\n", contentType, clientHttpReqMsgParams.httpReqUri);
+            PRINT_DEBUG_MESSAGE("Content-Type : %s for file : %s\n", contentType, clientHttpReqMsgParams.httpReqUri);
             char contentTypeHeaderField[100];
-            //sprintf(contentTypeHeaderField, "%s%s%s%s", "Content-Type", ":"
-            //        HTTP_RSP_SP, contentType, HTTP_RSP_CRLF);
             sprintf(contentTypeHeaderField, "%s%s%s%s", "Content-Type", ":"
                     HTTP_RSP_SP, contentType, HTTP_RSP_LF);
-            //printf("content type field(%s), length : %lu\n", contentTypeHeaderField, strlen(contentTypeHeaderField));
 #if !defined(HTTP_SEND_ONLY_STATUSLINE)
             send(connId, contentTypeHeaderField, strlen(contentTypeHeaderField), 0);
 #endif
@@ -491,11 +567,10 @@ static void handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgPar
             /* Content-Length */
             off_t contentLength = lseek(fileDesc, 0, SEEK_END);
             lseek(fileDesc, 0, SEEK_SET);
-            //printf("Content-Legth : %d for file : %s\n", (int)contentLength, clientHttpReqMsgParams.httpReqUri);
+            PRINT_DEBUG_MESSAGE("Content-Legth : %d for file : %s\n", (int)contentLength, clientHttpReqMsgParams.httpReqUri);
             char contentLengthHeaderField[100];
             sprintf(contentLengthHeaderField, "%s%s%d%s", "Content-Length", ":"
                     HTTP_RSP_SP, (int)contentLength, HTTP_RSP_CRLF);
-            //printf("content length field(%s), length : %lu\n", contentLengthHeaderField, strlen(contentLengthHeaderField));
 #if !defined(HTTP_SEND_ONLY_STATUSLINE)
             send(connId, contentLengthHeaderField, strlen(contentLengthHeaderField), 0);
 #endif
@@ -504,10 +579,381 @@ static void handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgPar
     		while ((bytes_read=read(fileDesc, dataBuffer, TRANSFER_SIZE)) > 0)
     			write(connId, dataBuffer, bytes_read);
 
+            PRINT_DEBUG_MESSAGE("Sent requested file contents\n");
             printf("Sent requested file contents\n");
         }
+        retVal = 0;
 	}
 	else
+    {
+        printf("File %s not found\n", path);
+        char notFoundHttpResponse[1024];
+        char *pNotFoundHttpResponse = &notFoundHttpResponse[0];
+        
+        char statusLine[100];
+        sprintf(statusLine, "%s%s%d%s%s%s", clientHttpReqMsgParams.httpReqVersion,
+                HTTP_RSP_SP, 404, HTTP_RSP_SP, "Not Found", HTTP_RSP_LF);
+        
+        strcpy(pNotFoundHttpResponse, statusLine);
+        pNotFoundHttpResponse += strlen(statusLine);
+        
+        char contentTypeHeaderField[100];
+        sprintf(contentTypeHeaderField, "%s%s%s%s", "Content-Type", ":"
+                HTTP_RSP_SP, "text/html", HTTP_RSP_LF);
+        
+        strcpy(pNotFoundHttpResponse, contentTypeHeaderField);
+        pNotFoundHttpResponse += strlen(contentTypeHeaderField);
+        
+        strcpy(pNotFoundHttpResponse, not_found_response_body);
+        
+        PRINT_DEBUG_MESSAGE("404 Not Found Response : %s\n", notFoundHttpResponse);
+        
+        send(connId, notFoundHttpResponse, strlen(notFoundHttpResponse), 0);
+        retVal = 0;
+    }
+    
+    return retVal;
+}
+
+static void getContentType(char *fileName, char *contentType)
+{
+    int systemCmdRetval = -1;
+    
+    if (fileName[0] == '/')
+    {
+        memmove(fileName, fileName+1, strlen(fileName));
+    }
+    
+    char command[100];
+#if 1
+    char tempFileName[100];
+    
+    char fileNameCopy[100];
+    strcpy(fileNameCopy, fileName);
+    
+    for (int i = 0; i < strlen(fileNameCopy); i++)
+    {
+        if ((fileNameCopy[i] == '/') || (fileNameCopy[i] == '.'))
+            fileNameCopy[i] = '_';
+    }
+    
+    sprintf(tempFileName, "%s%s%s%s", "out", "_", fileNameCopy, ".txt");
+    sprintf(command, "file --mime-type %s/%s > %s", serverConfigParams.serverDocumentRoot, fileName, tempFileName);
+#else
+    sprintf(command, "file --mime-type %s/%s > out.txt", serverConfigParams.serverDocumentRoot, fileName);
+#endif
+    
+    systemCmdRetval = system(command);
+    if (-1 != systemCmdRetval)
+    {
+        char *buffer = NULL;
+        size_t bufferSize = 0;
+        ssize_t numBytesRead = 0;
+#if 1
+        FILE *fp = fopen(tempFileName, "r");
+#else
+        FILE *fp = fopen("out.txt", "r");
+#endif
+        if (fp)
+        {
+            if ((numBytesRead = getline(&buffer, &bufferSize, fp)) != -1)
+            {
+                printf("Buffer: %s\n", buffer);
+                char *subStr = strstr(buffer, ":");
+                
+                /* Removing the : and space character at the beginning */
+                if (subStr[0] == ':')
+                    memmove(subStr, subStr+1, strlen(subStr));
+                
+                if (subStr[0] == ' ')
+                    memmove(subStr, subStr+1, strlen(subStr));
+                
+                size_t len = strlen(subStr);
+                /* Removing the trailing newline character */
+                if (len > 0 && subStr[len-1] == '\n')
+                    subStr[--len] = '\0';
+                //printf("Content-Type : %s\n", subStr);
+                strcpy(contentType, subStr);
+            }
+            
+            /* Remove temp file */
+#if 1
+            remove(tempFileName);
+#else
+            remove("out.txt");
+#endif
+            fclose(fp);
+        }
+        else
+        {
+#if 1
+            printf("File Open for %s failed\n", tempFileName);
+#else
+            printf("File Open for %s failed\n", "out.txt");
+#endif
+        }
+        free(buffer);
+    }
+    else
+    {
+        printf("System Command Failed\n");
+    }
+}
+
+static void sendBadRequestResponse(int connId, http_req_msg_params *clientHttpReqMsgParams)
+{
+    char badRequestHttpResponse[1024];
+    char *pBadRequestHttpResponse = &badRequestHttpResponse[0];
+    
+    char statusLine[100];
+    sprintf(statusLine, "%s%s%d%s%s%s", clientHttpReqMsgParams->httpReqVersion,
+            HTTP_RSP_SP, 400, HTTP_RSP_SP, "Bad Request", HTTP_RSP_LF);
+    
+    strcpy(pBadRequestHttpResponse, statusLine);
+    pBadRequestHttpResponse += strlen(statusLine);
+    
+    char contentTypeHeaderField[100];
+    sprintf(contentTypeHeaderField, "%s%s%s%s", "Content-Type", ":"
+            HTTP_RSP_SP, "text/html", HTTP_RSP_LF);
+    
+    strcpy(pBadRequestHttpResponse, contentTypeHeaderField);
+    pBadRequestHttpResponse += strlen(contentTypeHeaderField);
+    
+    strcpy(pBadRequestHttpResponse, bad_request_response_body);
+    
+    printf("Bad Request Response : %s\n", badRequestHttpResponse);
+    
+    send(connId, badRequestHttpResponse, strlen(badRequestHttpResponse), 0);
+}
+
+static void sendNotImplementedResponse(int connId, http_req_msg_params *clientHttpReqMsgParams)
+{
+    char notImplementedHttpResponse[1024];
+    char *pNotImplementedHttpResponse = &notImplementedHttpResponse[0];
+    
+    char statusLine[100];
+    sprintf(statusLine, "%s%s%d%s%s%s", clientHttpReqMsgParams->httpReqVersion,
+            HTTP_RSP_SP, 501, HTTP_RSP_SP, "Not Implemented", HTTP_RSP_LF);
+    
+    strcpy(pNotImplementedHttpResponse, statusLine);
+    pNotImplementedHttpResponse += strlen(statusLine);
+    
+    char contentTypeHeaderField[100];
+    sprintf(contentTypeHeaderField, "%s%s%s%s", "Content-Type", ":"
+            HTTP_RSP_SP, "text/html", HTTP_RSP_LF);
+    
+    strcpy(pNotImplementedHttpResponse, contentTypeHeaderField);
+    pNotImplementedHttpResponse += strlen(contentTypeHeaderField);
+    
+    strcpy(pNotImplementedHttpResponse, not_implemented_body);
+    
+    printf("Not Implemented Response : %s\n", notImplementedHttpResponse);
+    
+    send(connId, notImplementedHttpResponse, strlen(notImplementedHttpResponse), 0);
+}
+
+static int handlePostRequest(int connId, http_req_msg_params clientHttpReqMsgParams, char *httpReqMsgBuffer)
+{
+    int retVal = -1;
+    /*  Process the HTTP POST request and send appropriate response back to
+        the client.
+        The POST request will be of the following form:
+        POST /www/sha2/index.html HTTP/1.1
+        Host: localhost
+        Content-Length: 9
+        <blank line>
+        POST DATA
+     
+        The HTTP response will return the file requested in the POST URL (or index.html
+        if no file is specified) along with the POST DATA. This POST DATA will be added
+        as a section with a header "<h1>POST DATA</h1>" followed by a <pre> tag.
+     */
+    char path[512];
+    char dataBuffer[TRANSFER_SIZE];
+    int fileDesc = -1;
+    ssize_t bytes_read = -1;
+    bool isFileIndexHtml = false;
+    int contentLength = 0;
+    char httpReqMsgBufferCopy[HTTP_REQ_MSG_MAX_LEN];
+    char *pHttpReqMsgBufferCopy = NULL;
+    char postDataBuffer[512];
+    
+    memset(path, '\0', sizeof(path));
+    if (strcmp(clientHttpReqMsgParams.httpReqUri, "/") == 0)
+    {
+        /*  No file is requested in the URL (just the directory is requested),
+            so the default page (index.html or index.htm) is found and sent
+            as reponse to the client.
+         */
+        sprintf(path, "%s%s", (char *)serverConfigParams.serverDocumentRoot, "/index.html");
+        isFileIndexHtml = true;
+    }
+    else
+    {
+        sprintf(path, "%s%s", (char *)serverConfigParams.serverDocumentRoot, clientHttpReqMsgParams.httpReqUri);
+        isFileIndexHtml = false;
+    }
+    
+    PRINT_DEBUG_MESSAGE("Path : %s\n", path);
+    
+    strcpy(httpReqMsgBufferCopy, httpReqMsgBuffer);
+    pHttpReqMsgBufferCopy = &httpReqMsgBufferCopy[0];
+    
+    /* Read the POST DATA in the POST request */
+    char *token = strtok(httpReqMsgBuffer, "\r\n");
+    //printf("Token : %s\n", token);
+    while (token != NULL)
+    {
+        token = strtok(NULL, "\r\n");
+        //printf("Token : %s\n", token);
+        
+        char *subStr = NULL;
+        if ((subStr = strstr(token, "Content-Length:")) != NULL)
+        {
+            char *token2 = strtok(token, ":");
+            token2 = strtok(NULL, ":");
+            if (token2[0] == '/')
+            {
+                memmove(token2, token2+1, strlen(token2));
+            }
+            contentLength = atoi(token2);
+            break;
+        }
+    }
+    
+    while (*pHttpReqMsgBufferCopy != '\0')
+    {
+        if (*pHttpReqMsgBufferCopy == '\r' && *(pHttpReqMsgBufferCopy+1) == '\n')
+        {
+            pHttpReqMsgBufferCopy += 2;
+            if (*pHttpReqMsgBufferCopy == '\r' && *(pHttpReqMsgBufferCopy+1) == '\n')
+            {
+                pHttpReqMsgBufferCopy += 2;
+                int copySize = min(contentLength, sizeof(postDataBuffer) - 1);
+                strncpy(postDataBuffer, pHttpReqMsgBufferCopy, copySize);
+                postDataBuffer[copySize+1] = '\0';
+                break;
+            }
+        }
+        else
+        {
+            pHttpReqMsgBufferCopy += 2;
+        }
+    }
+    
+    printf("Post Data Buffer : %s\n", postDataBuffer);
+    
+    char newIndexFilePath[100];
+    sprintf(newIndexFilePath, "%s%s", (char *)serverConfigParams.serverDocumentRoot, "/index_copy.html");
+    printf("New Index File Path : %s\n", newIndexFilePath);
+    FILE *fp = fopen(path, "r");
+    FILE *fp_write = fopen(newIndexFilePath, "w");
+    if (fp && fp_write)
+    {
+        char *buffer;
+        size_t numBytes = 120;
+        ssize_t bytesRead = -1;
+        
+        buffer = (char *)malloc(numBytes*sizeof(char));
+        
+        while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
+        {
+            if (strcmp(buffer, "<div id=\"clear\"></div>\n") == 0)
+            {
+                printf("Buffer content : %s\n", buffer);
+                char appendBuffer[100];
+                sprintf(appendBuffer, "<h1>Post Data</h1>\n<pre>%s</pre>\n<div id=\"clear\"></div>\n", postDataBuffer);
+                fwrite(appendBuffer, sizeof(char), strlen(appendBuffer), fp_write);
+            }
+            else
+            {
+                fwrite(buffer, sizeof(char), strlen(buffer), fp_write);
+            }
+        }
+        
+        free(buffer);
+        fclose(fp);
+        fclose(fp_write);
+    }
+    else
+    {
+        printf("File Open Failed\n");
+    }
+    
+    /*  TODO : The HTTP response has the following lines
+     Status-Line : HTTP-Version SP Status-Code SP Reason-Phrase CRLF
+     Example : HTTP/1.1 200 OK
+     
+     Content-Type: <> #Tells about the type of content and the formatting of <file contents>
+     Content-Length: <> #Numeric length value of the no. of bytes of <file contents>
+     Connection: Keep-alive/Close
+     <file contents>
+     */
+    if ((fileDesc = open(path, O_RDONLY)) != -1 )
+    {
+        if (true == isFileIndexHtml)
+        {
+            printf("Sending index file contents : %s\n", path);
+            /* Status-Line */
+            char statusLine[100];
+            sprintf(statusLine, "%s%s%d%s%s%s", clientHttpReqMsgParams.httpReqVersion,
+                    HTTP_RSP_SP, 200, HTTP_RSP_SP, "OK", HTTP_RSP_LF);
+            printf("HTTP response : \n");
+            printf("%s", statusLine);
+            send(connId, statusLine, strlen(statusLine), 0);
+            
+            /* File Contents */
+            while ( (bytes_read=read(fileDesc, dataBuffer, TRANSFER_SIZE))>0 )
+                write(connId, dataBuffer, bytes_read);
+            
+            printf("Sent index file contents\n");
+        }
+        else
+        {
+            PRINT_DEBUG_MESSAGE("Sending requested file contents : %s\n", path);
+            /* Status-Line */
+            char statusLine[100];
+#if defined(HTTP_SEND_ONLY_STATUSLINE)
+            sprintf(statusLine, "%s%s%d%s%s%s", clientHttpReqMsgParams.httpReqVersion,
+                    HTTP_RSP_SP, 200, HTTP_RSP_SP, "OK", HTTP_RSP_CRLF);
+#else
+            sprintf(statusLine, "%s%s%d%s%s%s", clientHttpReqMsgParams.httpReqVersion,
+                    HTTP_RSP_SP, 200, HTTP_RSP_SP, "OK", HTTP_RSP_LF);
+#endif
+            send(connId, statusLine, strlen(statusLine), 0);
+            
+            /* Content-Type */
+            char contentType[100];
+            getContentType(clientHttpReqMsgParams.httpReqUri, contentType);
+            PRINT_DEBUG_MESSAGE("Content-Type : %s for file : %s\n", contentType, clientHttpReqMsgParams.httpReqUri);
+            char contentTypeHeaderField[100];
+            sprintf(contentTypeHeaderField, "%s%s%s%s", "Content-Type", ":"
+                    HTTP_RSP_SP, contentType, HTTP_RSP_LF);
+            PRINT_DEBUG_MESSAGE("content type field(%s), length : %lu\n", contentTypeHeaderField, strlen(contentTypeHeaderField));
+#if !defined(HTTP_SEND_ONLY_STATUSLINE)
+            send(connId, contentTypeHeaderField, strlen(contentTypeHeaderField), 0);
+#endif
+            
+            /* Content-Length */
+            off_t contentLength = lseek(fileDesc, 0, SEEK_END);
+            lseek(fileDesc, 0, SEEK_SET);
+            PRINT_DEBUG_MESSAGE("Content-Legth : %d for file : %s\n", (int)contentLength, clientHttpReqMsgParams.httpReqUri);
+            char contentLengthHeaderField[100];
+            sprintf(contentLengthHeaderField, "%s%s%d%s", "Content-Length", ":"
+                    HTTP_RSP_SP, (int)contentLength, HTTP_RSP_CRLF);
+            PRINT_DEBUG_MESSAGE("content length field(%s), length : %lu\n", contentLengthHeaderField, strlen(contentLengthHeaderField));
+#if !defined(HTTP_SEND_ONLY_STATUSLINE)
+            send(connId, contentLengthHeaderField, strlen(contentLengthHeaderField), 0);
+#endif
+            
+            /* File Contents */
+            while ((bytes_read=read(fileDesc, dataBuffer, TRANSFER_SIZE)) > 0)
+                write(connId, dataBuffer, bytes_read);
+            
+            PRINT_DEBUG_MESSAGE("Sent requested file contents\n");
+        }
+    }
+    else
     {
         printf("File %s not found\n", path);
         char notFoundHttpResponse[1024];
@@ -530,83 +976,9 @@ static void handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgPar
         
         strcpy(pNotFoundHttpResponse, not_found_response_body);
         
-        //printf("Response : %s\n", notFoundHttpResponse);
+        printf("Response : %s\n", notFoundHttpResponse);
         
         send(connId, notFoundHttpResponse, strlen(notFoundHttpResponse), 0);
     }
-}
-
-static void getContentType(char *fileName, char *contentType)
-{
-    int systemCmdRetval = -1;
-    
-    if (fileName[0] == '/')
-    {
-        memmove(fileName, fileName+1, strlen(fileName));
-    }
-    
-    char command[100];
-    sprintf(command, "file --mime-type %s/%s > out.txt", serverConfigParams.serverDocumentRoot, fileName);
-    
-    systemCmdRetval = system(command);
-    if (-1 != systemCmdRetval)
-    {
-        printf("System command sucess\n");
-        char *buffer = NULL;
-        size_t bufferSize = 0;
-        ssize_t numBytesRead = 0;
-        FILE *fp = fopen("out.txt", "r");
-        if (fp)
-        {
-            if ((numBytesRead = getline(&buffer, &bufferSize, fp)) != -1)
-            {
-                char *subStr = strstr(buffer, ":");
-                
-                /* Removing the : and space character at the beginning */
-                if (subStr[0] == ':')
-                    memmove(subStr, subStr+1, strlen(subStr));
-                
-                if (subStr[0] == ' ')
-                    memmove(subStr, subStr+1, strlen(subStr));
-                
-                size_t len = strlen(subStr);
-                /* Removing the trailing newline character */
-                if (len > 0 && subStr[len-1] == '\n')
-                    subStr[--len] = '\0';
-                //printf("Content-Type : %s\n", subStr);
-                strcpy(contentType, subStr);
-            }
-        }
-        
-        /* Remove temp file */
-        remove("out.txt");
-        free(buffer);
-        fclose(fp);
-    }
-}
-
-static void sendBadRequestResponse(int connId, http_req_msg_params clientHttpReqMsgParams)
-{
-    char badRequestHttpResponse[1024];
-    char *pBadRequestHttpResponse = &badRequestHttpResponse[0];
-    
-    char statusLine[100];
-    sprintf(statusLine, "%s%s%d%s%s%s", clientHttpReqMsgParams.httpReqVersion,
-            HTTP_RSP_SP, 400, HTTP_RSP_SP, "Bad Request", HTTP_RSP_LF);
-    
-    strcpy(pBadRequestHttpResponse, statusLine);
-    pBadRequestHttpResponse += strlen(statusLine);
-    
-    char contentTypeHeaderField[100];
-    sprintf(contentTypeHeaderField, "%s%s%s%s", "Content-Type", ":"
-            HTTP_RSP_SP, "text/html", HTTP_RSP_LF);
-    
-    strcpy(pBadRequestHttpResponse, contentTypeHeaderField);
-    pBadRequestHttpResponse += strlen(contentTypeHeaderField);
-    
-    strcpy(pBadRequestHttpResponse, bad_request_response_body);
-    
-    printf("Bad Request Response : %s\n", badRequestHttpResponse);
-    
-    send(connId, badRequestHttpResponse, strlen(badRequestHttpResponse), 0);
+    return retVal;
 }
