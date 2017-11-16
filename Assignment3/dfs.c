@@ -66,6 +66,8 @@ int main(int argc, char *argv[])
     
     printf("Waiting for connection request from the client\n");
     
+    //sleep(30);
+    
     struct sockaddr_in clientSockAddr;
     socklen_t clientAddrLen = -1;
     
@@ -286,6 +288,7 @@ int handleRequest(int clientSock, char *fileDataBuffer)
             
             if (strcmp(command, "LIST") == 0)
             {
+                printf("LIST funciton called\n");
                 int listReqRetVal = handleListRequest(clientSock, fileDataBuffer);
                 if (listReqRetVal != 0)
                 {
@@ -294,6 +297,7 @@ int handleRequest(int clientSock, char *fileDataBuffer)
             }
             else if (strcmp(command, "GET") == 0)
             {
+                printf("GET funciton called\n");
                 int getReqRetVal = handleGetRequest(clientSock, fileDataBuffer);
                 if (getReqRetVal != 0)
                 {
@@ -302,10 +306,20 @@ int handleRequest(int clientSock, char *fileDataBuffer)
             }
             else if (strcmp(command, "PUT") == 0)
             {
+                printf("PUT funciton called\n");
                 int putReqRetVal = handlePutRequest(clientSock, fileDataBuffer);
                 if (putReqRetVal != 0)
                 {
                     printf("Handle Put Request Failed\n");
+                }
+            }
+            else if (strcmp(command, "MKDIR") == 0)
+            {
+                printf("MKDIR funciton called\n");
+                int mkDirReqRetVal = handleMkdirRequest(clientSock, fileDataBuffer);
+                if (mkDirReqRetVal != 0)
+                {
+                    printf("Handle Mkdir Request Failed\n");
                 }
             }
             else
@@ -389,19 +403,31 @@ int handlePutRequest(int clientSock, char *fileDataBuffer)
     char userName[50];
     char password[50];
     char fileName[100];
+    char subfolderName[100];
     int fileMember1 = -1;
     int fileMember2 = -1;
     int fileSize1 = -1;
     int fileSize2 = -1;
     
-    extractPutReqParams(fileDataBuffer, userName, password, fileName, &fileMember1,
-                        &fileMember2, &fileSize1, &fileSize2);
-    
-    PRINT_DEBUG_MESSAGE("FileName: %s, FileSize: (%d, %d), FileMember: (%d, %d)\n",
-                        fileName, fileSize1, fileSize2, fileMember1, fileMember2);
+    extractPutReqParams(fileDataBuffer, userName, password, subfolderName, fileName,
+                        &fileMember1, &fileMember2, &fileSize1, &fileSize2);
     
     char userDirPath[100];
-    sprintf(userDirPath, "%s%s%s%s", "./", dfsServerParams.dfsDirectory, "/", userName);
+    if (strcmp(subfolderName, "Nil") == 0)
+    {
+        PRINT_DEBUG_MESSAGE("FileName: %s, FileSize: (%d, %d), FileMember: (%d, %d)\n",
+                        fileName, fileSize1, fileSize2, fileMember1, fileMember2);
+        sprintf(userDirPath, "%s%s%s%s", "./", dfsServerParams.dfsDirectory, "/", userName);
+    }
+    else
+    {
+        PRINT_DEBUG_MESSAGE("SubFolderName: %s, FileName: %s, FileSize: (%d, %d), FileMember: (%d, %d)\n",
+                            subfolderName , fileName, fileSize1, fileSize2, fileMember1, fileMember2);
+        sprintf(userDirPath, "%s%s%s%s%s%s", "./", dfsServerParams.dfsDirectory, "/", subfolderName, "/", userName);
+    }
+    
+    printf("userDirPath: %s\n", userDirPath);
+    
     checkIfDirectoryExists(userDirPath);
     
     int readSize = 0;
@@ -409,11 +435,21 @@ int handlePutRequest(int clientSock, char *fileDataBuffer)
     memset(fileName1, '\0', sizeof(fileName1));
     memset(fileName2, '\0', sizeof(fileName2));
     
-    sprintf(fileName1, "%s%s%s%s%s%s.%d", "./", dfsServerParams.dfsDirectory, "/", userName, "/", fileName, fileMember1);
-    sprintf(fileName2, "%s%s%s%s%s%s.%d", "./", dfsServerParams.dfsDirectory, "/", userName, "/", fileName, fileMember2);
+    //sprintf(fileName1, "%s%s%s%s%s%s.%d", "./", dfsServerParams.dfsDirectory, "/", userName, "/", fileName, fileMember1);
+    //sprintf(fileName2, "%s%s%s%s%s%s.%d", "./", dfsServerParams.dfsDirectory, "/", userName, "/", fileName, fileMember2);
     
-    //sprintf(fileName1, "%s%s%s%s%s%s%s.%d", "./", dfsServerParams.dfsDirectory, "/", userName, "/", ".", fileName, fileMember1);
-    //sprintf(fileName2, "%s%s%s%s%s%s%s.%d", "./", dfsServerParams.dfsDirectory, "/", userName, "/", ".", fileName, fileMember2);
+    if (strcmp(subfolderName, "Nil") == 0)
+    {
+        sprintf(fileName1, "%s%s%s%s%s%s%s.%d", "./", dfsServerParams.dfsDirectory, "/", userName, "/", ".", fileName, fileMember1);
+        sprintf(fileName2, "%s%s%s%s%s%s%s.%d", "./", dfsServerParams.dfsDirectory, "/", userName, "/", ".", fileName, fileMember2);
+    }
+    else	
+    {
+        sprintf(fileName1, "%s%s%s%s%s%s%s%s%s.%d", "./", dfsServerParams.dfsDirectory,
+                "/", subfolderName, "/", userName, "/", ".", fileName, fileMember1);
+        sprintf(fileName2, "%s%s%s%s%s%s%s%s%s.%d", "./", dfsServerParams.dfsDirectory,
+                "/", subfolderName, "/", userName, "/", ".", fileName, fileMember2);
+    }
     
     printf("FileName1: %s, FileName2: %s\n", fileName1, fileName2);
     
@@ -478,8 +514,9 @@ int handlePutRequest(int clientSock, char *fileDataBuffer)
     return retVal;
 }
 
-void extractPutReqParams(char *fileDataBuffer, char *userName, char *password, char *fileName,
-                          int *fileMember1, int *fileMember2, int *fileSize1, int *fileSize2)
+void extractPutReqParams(char *fileDataBuffer, char *userName, char *password,
+                         char *subfolderName, char *fileName, int *fileMember1,
+                         int *fileMember2, int *fileSize1, int *fileSize2)
 {
     char spaceLimiter[] = " ";
     char colonLimiter[] = ":";
@@ -491,6 +528,10 @@ void extractPutReqParams(char *fileDataBuffer, char *userName, char *password, c
     char *passwordSubStr;
     
     passwordSubStr = strstr(fileDataBuffer, "password");
+    
+    char *subfolderNameSubStr;
+    
+    subfolderNameSubStr = strstr(fileDataBuffer, "subfolderName");
     
     char *fileNameSubStr;
     
@@ -526,6 +567,14 @@ void extractPutReqParams(char *fileDataBuffer, char *userName, char *password, c
         char *token2 = strtok(token, colonLimiter);
         token2 = strtok(NULL, colonLimiter);
         strcpy(password, token2);
+    }
+    
+    token = strtok(subfolderNameSubStr, spaceLimiter);
+    if (token)
+    {
+        char *token2 = strtok(token, colonLimiter);
+        token2 = strtok(NULL, colonLimiter);
+        strcpy(subfolderName, token2);
     }
     
     token = strtok(fileNameSubStr, spaceLimiter);
@@ -595,6 +644,11 @@ int handleGetRequest(int clientSock, char *fileDataBuffer)
     int fileMember2 = -1;
     int filePart1Size = -1;
     int filePart2Size = -1;
+    char file1Name[50];
+    char file2Name[50];
+    
+    memset(file1Name, '\0', sizeof(file1Name));
+    memset(file2Name, '\0', sizeof(file2Name));
     
     //printf("File Data Buffer content: %s\n", fileDataBuffer);
     
@@ -609,10 +663,12 @@ int handleGetRequest(int clientSock, char *fileDataBuffer)
     PRINT_DEBUG_MESSAGE("UserDirPath: %s\n", userDirPath);
     
     bool fileFound = false;
-    checkForFileInDir(fileName, userDirPath, &fileFound, &fileMember1, &fileMember2);
+    checkForFileInDir(fileName, userDirPath, &fileFound, &fileMember1, &fileMember2,
+                      file1Name, file2Name);
     
     char file1Path[100];
-    sprintf(file1Path, "%s%s%s.%d", userDirPath, "/", fileName, fileMember1);
+    //sprintf(file1Path, "%s%s%s.%d", userDirPath, "/", fileName, fileMember1);
+    sprintf(file1Path, "%s%s%s%s.%d", userDirPath, "/", ".", fileName, fileMember1);
     PRINT_DEBUG_MESSAGE("File1Path: %s\n", file1Path);
     
     FILE *fptr = fopen(file1Path, "r");
@@ -625,7 +681,8 @@ int handleGetRequest(int clientSock, char *fileDataBuffer)
     }
     
     char file2Path[100];
-    sprintf(file2Path, "%s%s%s.%d", userDirPath, "/", fileName, fileMember2);
+    //sprintf(file2Path, "%s%s%s.%d", userDirPath, "/", fileName, fileMember2);
+    sprintf(file2Path, "%s%s%s%s.%d", userDirPath, "/", ".", fileName, fileMember2);
     PRINT_DEBUG_MESSAGE("File1Path: %s\n", file2Path);
     
     FILE *fptr2 = fopen(file2Path, "r");
@@ -640,13 +697,15 @@ int handleGetRequest(int clientSock, char *fileDataBuffer)
     PRINT_DEBUG_MESSAGE("FileMembers: (%d, %d), FilePartSizes: (%d, %d)\n",
                         fileMember1, fileMember2, filePart1Size, filePart2Size);
     
-    char responseMsg[100];
+    char responseMsg[512];
     memset(responseMsg, '\0', sizeof(responseMsg));
     if (fileFound == true)
     {
         printf("Match found\n");
-        sprintf(responseMsg, "fileMember1:%d fileMember2:%d filePart1Size:%d filePart2Size:%d",
-                fileMember1, fileMember2, filePart1Size, filePart2Size);
+        sprintf(responseMsg, "file1:%s file2:%s fileMember1:%d fileMember2:%d filePart1Size:%d filePart2Size:%d",
+                file1Name, file2Name, fileMember1, fileMember2, filePart1Size, filePart2Size);
+        
+        printf("responseMsg::%s\n", responseMsg);
         
         write(clientSock, responseMsg, strlen(responseMsg));
         
@@ -765,7 +824,7 @@ void extractGetReqParams(char *fileDataBuffer, char *userName, char *password, c
 }
 
 void checkForFileInDir(char *fileName, char *userDirPath, bool *fileFound,
-                       int *fileMember1, int *fileMember2)
+                       int *fileMember1, int *fileMember2, char *file1, char *file2)
 {
     DIR *d;
     struct dirent *dir;
@@ -784,6 +843,15 @@ void checkForFileInDir(char *fileName, char *userDirPath, bool *fileFound,
             if (strstr(dir->d_name, fileName))
             {
                 printf("File: %s\n", dir->d_name);
+                if (*file1 == '\0')
+                {
+                    strcpy(file1, dir->d_name);
+                }
+                else
+                {
+                    strcpy(file2, dir->d_name);
+                }
+                
                 char filePartName[100];
                 strcpy(filePartName, dir->d_name);
                 
@@ -924,5 +992,68 @@ void listFilesInDir(char *dirPath, int indent, char *fileList)
             }
         }
         closedir(dir);
+    }
+}
+
+
+int handleMkdirRequest(int clientSock, char *fileDataBuffer)
+{
+    int retVal = -1;
+    char userName[50];
+    char password[50];
+    char subFolderName[100];
+    
+    extractMkdirReqParams(fileDataBuffer, userName, password, subFolderName);
+    
+    PRINT_DEBUG_MESSAGE("SubFolderName: %s", subFolderName);
+    
+    char subfolderPath[100];
+    sprintf(subfolderPath, "%s%s%s%s", "./", dfsServerParams.dfsDirectory, "/", subFolderName);
+    checkIfDirectoryExists(subfolderPath);
+    
+    retVal = 0;
+    
+    return retVal;
+}
+
+void extractMkdirReqParams(char *fileDataBuffer, char *userName, char *password, char *subfolderName)
+{
+    char spaceLimiter[] = " ";
+    char colonLimiter[] = ":";
+    
+    char *usernameSubStr;
+    
+    usernameSubStr = strstr(fileDataBuffer, "username");
+    
+    char *passwordSubStr;
+    
+    passwordSubStr = strstr(fileDataBuffer, "password");
+    
+    char *fileNameSubStr;
+    
+    fileNameSubStr = strstr(fileDataBuffer, "subfolder");
+    
+    char *token = strtok(usernameSubStr, spaceLimiter);
+    if (token)
+    {
+        char *token2 = strtok(token, colonLimiter);
+        token2 = strtok(NULL, colonLimiter);
+        strcpy(userName, token2);
+    }
+    
+    token = strtok(passwordSubStr, spaceLimiter);
+    if (token)
+    {
+        char *token2 = strtok(token, colonLimiter);
+        token2 = strtok(NULL, colonLimiter);
+        strcpy(password, token2);
+    }
+    
+    token = strtok(fileNameSubStr, spaceLimiter);
+    if (token)
+    {
+        char *token2 = strtok(token, colonLimiter);
+        token2 = strtok(NULL, colonLimiter);
+        strcpy(subfolderName, token2);
     }
 }

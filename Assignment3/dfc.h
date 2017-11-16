@@ -1,8 +1,6 @@
 #ifndef _DFC_H_
 #define _DFC_H_
 
-
-
 /*  ----------------------------------------------------------------
      Macros
     ----------------------------------------------------------------
@@ -12,7 +10,7 @@
 #define PRINT_DEBUG_MESSAGES        (1)
 #define MAX_USER_FOLDERS            (10)
 #define MAX_FILE_COUNT              (50)
-
+//#define ENCRYPTION                  (1)
 
 #ifdef PRINT_DEBUG_MESSAGES
 #define PRINT_DEBUG_MESSAGE(...) do{ fprintf( stderr, __VA_ARGS__ ); } while( false )
@@ -44,6 +42,8 @@ typedef struct _dfcParams_
 
 typedef struct _dfsFilePairMembers_
 {
+    char        fileMember1Name[100];
+    char        fileMember2Name[100];
     int         fileMember1;
     int         fileMember2;
     int         fileMember1Size;
@@ -74,6 +74,8 @@ struct sockaddr_in dfs2ServerSockAddr;
 struct sockaddr_in dfs3ServerSockAddr;
 struct sockaddr_in dfs4ServerSockAddr;
 
+struct timeval timeout;
+
 dfcParams   dfcConfigParams;
 dfsFileList xDfsServerFileList;
 int         dfsServerFileListUserCount;
@@ -91,7 +93,7 @@ static int createDFSServerSockets(void);
 
 static int divideFiles(char *fileName, char *filePart1, char *filePart2, char *filePart3, char *filePart4);
 
-static int sendFilesToDFSServers(char *fileName);
+static int sendFilesToDFSServers(char *fileName, char *subfolderName);
 
 static int sendFileDataToDFSServer(char *dfsName, dfsFilePairMembers dfsMembers, char *fileName, char *headerMsg);
 static int calculateMD5Hash(char *filename, int *xVal);
@@ -112,6 +114,8 @@ static void fillFileSizeInfoInHeader(int xVal, char *headerMessage1, char *heade
 
 static void intializeDfsFilePairMembers(dfsFilePairMembers *dfs1Members, dfsFilePairMembers *dfs2Members,
                                         dfsFilePairMembers *dfs3Members, dfsFilePairMembers *dfs4Members);
+char * xorencrypt(char * message, char * key);
+
 static int getFileFromDFSServers(char *fileName);
 static int getFileInfoFromDFSServers(char *dfsName, dfsFilePairMembers *dfsMembers, char *fileName, char *headerMsg);
 static int getFileInfoFromDFSServer(char *headerMsg, int dfsServerSock, struct sockaddr_in dfsServerSockAddr,
@@ -135,5 +139,9 @@ static void findFilesFromDFSServerFileList(char *fileListDFSServer1, char *fileL
                                            char *fileListDFSServer3, char *fileListDFSServer4);
 static void findFilesFromIndividualDFSServerFileList(char *fileListDFSServer, char *dfsServerFileList);
 static void filldfsServerFileListInClient(char *dfsServerFileList);
+
+static int createSubFolderonDFS(char *subfolder);
+static int createSubFolderOnIndDFSServers(char *dfsName, char *headerMsg, int dfsServerSock,
+                                          struct sockaddr_in dfsServerSockAddr);
 
 #endif
