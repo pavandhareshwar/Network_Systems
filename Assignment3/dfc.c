@@ -122,9 +122,6 @@ int main(int argc, char *argv[])
         memset(&xDfsServerFileList, '\0', sizeof(xDfsServerFileList));
         dfsServerFileListUserCount = 0;
         
-        /*  TODO: List should only list files under the specified
-         username folder. Change the code to do this instead.
-         */
         int listFilesRetVal = listFilesFromDFSServers(subfolder);
         if (listFilesRetVal)
         {
@@ -146,6 +143,11 @@ int main(int argc, char *argv[])
         {
             printf("\n");
         }
+        
+        dfsFilePartsRcvdFromDFSServers.dfsFilePart1 = false;
+        dfsFilePartsRcvdFromDFSServers.dfsFilePart2 = false;
+        dfsFilePartsRcvdFromDFSServers.dfsFilePart3 = false;
+        dfsFilePartsRcvdFromDFSServers.dfsFilePart4 = false;
         
         int getFilesRetVal = getFileFromDFSServers(fileName, subfolder);
         if (getFilesRetVal)
@@ -997,6 +999,7 @@ char * xorencrypt(char * message, char * key)
 int getFileFromDFSServers(char *fileName, char *subfolderName)
 {
     int retVal = -1;
+    int retVal1 = -1, retVal2 = -1, retVal3 = -1, retVal4 = -1;
     
     dfsFilePairMembers dfs1Members;
     dfsFilePairMembers dfs2Members;
@@ -1017,18 +1020,22 @@ int getFileFromDFSServers(char *fileName, char *subfolderName)
                 dfcConfigParams.userName, dfcConfigParams.password, "GET", fileName, subfolderName);
     }
     
-    
     /* Getting files from DFS1 */
-    retVal = getFileInfoFromDFSServers("DFS1", &dfs1Members, fileName, headerMessage);
+    retVal1 = getFileInfoFromDFSServers("DFS1", &dfs1Members, fileName, headerMessage);
    
     /* Getting files from DFS2 */
-    retVal =  getFileInfoFromDFSServers("DFS2", &dfs2Members, fileName, headerMessage);
+    retVal2 =  getFileInfoFromDFSServers("DFS2", &dfs2Members, fileName, headerMessage);
     
     /* Getting files from DFS3 */
-    retVal =  getFileInfoFromDFSServers("DFS3", &dfs3Members, fileName, headerMessage);
+    retVal3 =  getFileInfoFromDFSServers("DFS3", &dfs3Members, fileName, headerMessage);
     
     /* Getting files from DFS4 */
-    retVal =  getFileInfoFromDFSServers("DFS4", &dfs4Members, fileName, headerMessage);
+    retVal4 =  getFileInfoFromDFSServers("DFS4", &dfs4Members, fileName, headerMessage);
+    
+    if (retVal1 == -1 && retVal2 == -1 && retVal3 == -1 && retVal4 == -1)
+    {
+        return -1;
+    }
     
     bool canBeCombined = checkIfFilesCanBeCombined(dfs1Members, dfs2Members, dfs3Members, dfs4Members);
     
@@ -1156,9 +1163,16 @@ int getFileInfoFromDFSServer(char *headerMsg, int dfsServerSock, struct sockaddr
                 read(dfsServerSock, responseBuffer, sizeof(responseBuffer));
                 printf("responseBuffer: %s\n", responseBuffer);
                 
-                parseGetResponseMsg(responseBuffer, dfsMembers, filePart1Size, filePart2Size);
-                
-                retVal = 0;
+                if (strcmp(responseBuffer, "Files not found") == 0)
+                {
+                    printf("File not found on DFS server\n");
+                    retVal = -1;
+                }
+                else
+                {
+                    parseGetResponseMsg(responseBuffer, dfsMembers, filePart1Size, filePart2Size);
+                    retVal = 0;
+                }
             }
         }
     }
@@ -1247,64 +1261,78 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
     FILE *fptr2 = NULL;
     char command[100];
     memset(command, '\0', sizeof(command));
+    bool  requestFile1 = false;
+    bool  requestFile2 = false;
     
-    //sprintf(command, "%s %s.%d", "GET", fileName, dfsMembers->fileMember1);
-    sprintf(command, "%s %s", "GET", dfsMembers->fileMember1Name);
+    fillFileRequestBooleans(dfsMembers, &requestFile1, &requestFile2);
     
-    /* send the message line to the server */
-    n = write(dfsServerSock, command, strlen(command));
-    if (n < 0)
+    if (requestFile1 == true)
     {
-        perror("ERROR writing to socket");
-    }
-    else
-    {
-        char filePart1Name[50];
-        //sprintf(filePart1Name, "%s.%d", fileName, dfsMembers->fileMember1);
-        strcpy(filePart1Name, dfsMembers->fileMember1Name);
+        //sprintf(command, "%s %s.%d", "GET", fileName, dfsMembers->fileMember1);
+        sprintf(command, "%s %s", "GET", dfsMembers->fileMember1Name);
         
-        if (filePart1Name[0] == '.')
+        printf("command:%s\n", command);
+        
+        /* send the message line to the server */
+        n = write(dfsServerSock, command, strlen(command));
+        if (n < 0)
         {
-            memcpy(filePart1Name, filePart1Name+1, strlen(filePart1Name));
+            perror("ERROR writing to socket");
         }
-        
-        printf("filePart1Name:%s\n", filePart1Name);
-        
-        int readSize = 0;
-        int sizeToRead = -1;
-        
-        fptr = fopen(filePart1Name, "w");
-        if (fptr)
+        else
         {
-            char receiveBuffer[1024];
-            while(readSize < filePart1Size)
+            char filePart1Name[50];
+            //sprintf(filePart1Name, "%s.%d", fileName, dfsMembers->fileMember1);
+            strcpy(filePart1Name, dfsMembers->fileMember1Name);
+            
+            if (filePart1Name[0] == '.')
             {
-                sizeToRead = min(sizeof(receiveBuffer), (filePart1Size - readSize));
-                memset(receiveBuffer, '\0', sizeof(receiveBuffer));
-                read(dfsServerSock, receiveBuffer, sizeToRead);
-                
-#ifdef ENCRYPTION
-                char * decrypted = xorencrypt(receiveBuffer, dfcConfigParams.password);
-                
-                fwrite(decrypted, sizeof(char), (sizeToRead-1), fptr);
-                
-                free(decrypted);
-#else
-                
-                fwrite(receiveBuffer, sizeof(char), sizeToRead, fptr);
-#endif
-                
-                //ssize_t rcvdBytes = recv(clientSock, receiveBuffer, sizeof(receiveBuffer), 0);
-                
-                readSize += sizeToRead;
+                memcpy(filePart1Name, filePart1Name+1, strlen(filePart1Name));
             }
-            printf("Received %d out of %d bytes\n", readSize, filePart1Size);
-            fclose(fptr);
+            
+            printf("filePart1Name:%s\n", filePart1Name);
+            
+            int readSize = 0;
+            int sizeToRead = -1;
+            
+            fptr = fopen(filePart1Name, "w");
+            if (fptr)
+            {
+                char receiveBuffer[1024];
+                while(readSize < filePart1Size)
+                {
+                    sizeToRead = min(sizeof(receiveBuffer), (filePart1Size - readSize));
+                    memset(receiveBuffer, '\0', sizeof(receiveBuffer));
+                    read(dfsServerSock, receiveBuffer, sizeToRead);
+                    
+#ifdef ENCRYPTION
+                    char * decrypted = xorencrypt(receiveBuffer, dfcConfigParams.password);
+                    
+                    fwrite(decrypted, sizeof(char), (sizeToRead-1), fptr);
+                    
+                    free(decrypted);
+#else
+                    
+                    fwrite(receiveBuffer, sizeof(char), sizeToRead, fptr);
+#endif
+                    
+                    //ssize_t rcvdBytes = recv(clientSock, receiveBuffer, sizeof(receiveBuffer), 0);
+                    
+                    readSize += sizeToRead;
+                }
+                printf("Received %d out of %d bytes\n", readSize, filePart1Size);
+                fclose(fptr);
+            }
         }
-        
+    }
+    
+    if (requestFile2 == true)
+    {
         memset(command, '\0', sizeof(command));
         //sprintf(command, "%s %s.%d", "GET", fileName, dfsMembers->fileMember2);
         sprintf(command, "%s %s", "GET", dfsMembers->fileMember2Name);
+        
+        printf("command:%s\n", command);
         
         /* send the message line to the server */
         n = write(dfsServerSock, command, strlen(command));
@@ -1325,8 +1353,8 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
             
             printf("filePart2Name:%s\n", filePart2Name);
             
-            readSize = 0;
-            sizeToRead = -1;
+            int readSize = 0;
+            int sizeToRead = -1;
             
             fptr2 = fopen(filePart2Name, "w");
             if (fptr2)
@@ -1341,12 +1369,12 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
 #ifdef ENCRYPTION
                     char * decrypted = xorencrypt(receiveBuffer, dfcConfigParams.password);
                     
-                    fwrite(decrypted, sizeof(char), (sizeToRead-1), fptr);
+                    fwrite(decrypted, sizeof(char), (sizeToRead-1), fptr2);
                     
                     free(decrypted);
 #else
                     
-                    fwrite(receiveBuffer, sizeof(char), sizeToRead, fptr);
+                    fwrite(receiveBuffer, sizeof(char), sizeToRead, fptr2);
 #endif
                     
                     //ssize_t rcvdBytes = recv(clientSock, receiveBuffer, sizeof(receiveBuffer), 0);
@@ -1356,10 +1384,123 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
                 printf("Received %d out of %d bytes\n", readSize, filePart2Size);
                 fclose(fptr2);
             }
-            retVal = 0;
         }
     }
+    
+    retVal = 0;
+    
     return retVal;
+}
+
+void fillFileRequestBooleans(dfsFilePairMembers *dfsMembers, bool *pRequestFile1, bool *pRequestFile2)
+{
+    if (dfsMembers->fileMember1 == 1 || dfsMembers->fileMember2 == 1)
+    {
+        if (dfsFilePartsRcvdFromDFSServers.dfsFilePart1 == false)
+        {
+            dfsFilePartsRcvdFromDFSServers.dfsFilePart1 = true;
+            if (dfsMembers->fileMember1 == 1)
+            {
+                *pRequestFile1 = true;
+            }
+            if (dfsMembers->fileMember2 == 1)
+            {
+                *pRequestFile2 = true;
+            }
+        }
+        else
+        {
+            if (dfsMembers->fileMember1 == 1)
+            {
+                *pRequestFile1 = false;
+            }
+            if (dfsMembers->fileMember2 == 1)
+            {
+                *pRequestFile2 = false;
+            }
+        }
+    }
+    
+    if (dfsMembers->fileMember1 == 2 || dfsMembers->fileMember2 == 2)
+    {
+        if (dfsFilePartsRcvdFromDFSServers.dfsFilePart2 == false)
+        {
+            dfsFilePartsRcvdFromDFSServers.dfsFilePart2 = true;
+            if (dfsMembers->fileMember1 == 2)
+            {
+                *pRequestFile1 = true;
+            }
+            if (dfsMembers->fileMember2 == 2)
+            {
+                *pRequestFile2 = true;
+            }
+        }
+        else
+        {
+            if (dfsMembers->fileMember1 == 2)
+            {
+                *pRequestFile1 = false;
+            }
+            if (dfsMembers->fileMember2 == 2)
+            {
+                *pRequestFile2 = false;
+            }
+        }
+    }
+    
+    if (dfsMembers->fileMember1 == 3 || dfsMembers->fileMember2 == 3)
+    {
+        if (dfsFilePartsRcvdFromDFSServers.dfsFilePart3 == false)
+        {
+            dfsFilePartsRcvdFromDFSServers.dfsFilePart3 = true;
+            if (dfsMembers->fileMember1 == 3)
+            {
+                *pRequestFile1 = true;
+            }
+            if (dfsMembers->fileMember2 == 3)
+            {
+                *pRequestFile2 = true;
+            }
+        }
+        else
+        {
+            if (dfsMembers->fileMember1 == 3)
+            {
+                *pRequestFile1 = false;
+            }
+            if (dfsMembers->fileMember2 == 3)
+            {
+                *pRequestFile2 = false;
+            }
+        }
+    }
+    
+    if (dfsMembers->fileMember1 == 4 || dfsMembers->fileMember2 == 4)
+    {
+        if (dfsFilePartsRcvdFromDFSServers.dfsFilePart4 == false)
+        {
+            dfsFilePartsRcvdFromDFSServers.dfsFilePart4 = true;
+            if (dfsMembers->fileMember1 == 4)
+            {
+                *pRequestFile1 = true;
+            }
+            if (dfsMembers->fileMember2 == 4)
+            {
+                *pRequestFile2 = true;
+            }
+        }
+        else
+        {
+            if (dfsMembers->fileMember1 == 4)
+            {
+                *pRequestFile1 = false;
+            }
+            if (dfsMembers->fileMember2 == 4)
+            {
+                *pRequestFile2 = false;
+            }
+        }
+    }
 }
 
 bool checkIfFilesCanBeCombined(dfsFilePairMembers dfs1Members, dfsFilePairMembers dfs2Members,

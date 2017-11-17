@@ -57,6 +57,14 @@ typedef struct _dfsFileList_
     char        userFileNames[MAX_FILE_COUNT][50];
 }dfsFileList;
 
+typedef struct _dfsFilePartsRecvd_
+{
+    bool        dfsFilePart1;
+    bool        dfsFilePart2;
+    bool        dfsFilePart3;
+    bool        dfsFilePart4;
+}dfsFilePartsRecvd;
+
 /*  ----------------------------------------------------------------
      Globals
     ----------------------------------------------------------------
@@ -76,9 +84,10 @@ struct sockaddr_in dfs4ServerSockAddr;
 
 struct timeval timeout;
 
-dfcParams   dfcConfigParams;
-dfsFileList xDfsServerFileList;
-int         dfsServerFileListUserCount;
+dfcParams           dfcConfigParams;
+dfsFileList         xDfsServerFileList;
+int                 dfsServerFileListUserCount;
+dfsFilePartsRecvd   dfsFilePartsRcvdFromDFSServers;
 
 /*  ----------------------------------------------------------------
      Function Prototypes
@@ -143,5 +152,7 @@ static void filldfsServerFileListInClient(char *dfsServerFileList);
 static int createSubFolderonDFS(char *subfolder);
 static int createSubFolderOnIndDFSServers(char *dfsName, char *headerMsg, int dfsServerSock,
                                           struct sockaddr_in dfsServerSockAddr);
+
+static void fillFileRequestBooleans(dfsFilePairMembers *dfsMembers, bool *pRequestFile1, bool *pRequestFile2);
 
 #endif

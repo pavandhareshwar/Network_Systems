@@ -66,7 +66,7 @@ static void extractPutReqParams(char *fileDataBuffer, char *userName, char *pass
 static int handleGetRequest(int clientSock, char *fileDataBuffer);
 static void extractGetReqParams(char *fileDataBuffer, char *userName, char *password,
                                 char *fileName, char *subfolderName);
-static void checkForFileInDir(char *fileName, char *userDirPath, bool *fileFound,
+static void checkForFileInDir(char *fileName, char *userDirPath, bool *file1Found, bool *file2Found,
                               int *fileMember1, int *fileMember2, char *file1, char *file2);
 static void parseReqMsg(char *reqBuffer, char *filePartName);
 

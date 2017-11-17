@@ -661,46 +661,49 @@ int handleGetRequest(int clientSock, char *fileDataBuffer)
     
     PRINT_DEBUG_MESSAGE("UserDirPath: %s\n", userDirPath);
     
-    bool fileFound = false;
-    checkForFileInDir(fileName, userDirPath, &fileFound, &fileMember1, &fileMember2,
-                      file1Name, file2Name);
-    
-    char file1Path[100];
-    //sprintf(file1Path, "%s%s%s.%d", userDirPath, "/", fileName, fileMember1);
-    sprintf(file1Path, "%s%s%s%s%s%d", userDirPath, "/", ".", fileName, ".", fileMember1);
-    PRINT_DEBUG_MESSAGE("File1Path: %s\n", file1Path);
-    
-    FILE *fptr = fopen(file1Path, "r");
-    if (fptr)
-    {
-        fseek(fptr, 0, SEEK_END);
-        filePart1Size = (int)ftell(fptr);
-        fseek(fptr, 0, SEEK_SET);
-        fclose(fptr);
-    }
-    
-    char file2Path[100];
-    //sprintf(file2Path, "%s%s%s.%d", userDirPath, "/", fileName, fileMember2);
-    sprintf(file2Path, "%s%s%s%s%s%d", userDirPath, "/", ".", fileName, ".", fileMember2);
-    PRINT_DEBUG_MESSAGE("File2Path: %s\n", file2Path);
-    
-    FILE *fptr2 = fopen(file2Path, "r");
-    if (fptr)
-    {
-        fseek(fptr, 0, SEEK_END);
-        filePart2Size = (int)ftell(fptr2);
-        fseek(fptr, 0, SEEK_SET);
-        fclose(fptr2);
-    }
-    
-    PRINT_DEBUG_MESSAGE("FileMembers: (%d, %d), FilePartSizes: (%d, %d)\n",
-                        fileMember1, fileMember2, filePart1Size, filePart2Size);
+    bool file1Found = false;
+    bool file2Found = false;
+    checkForFileInDir(fileName, userDirPath, &file1Found, &file2Found,
+                      &fileMember1, &fileMember2, file1Name, file2Name);
     
     char responseMsg[512];
     memset(responseMsg, '\0', sizeof(responseMsg));
-    if (fileFound == true)
+    
+    if (file1Found == true && file2Found == true)
     {
-        printf("Match found\n");
+        printf("Files found\n");
+        
+        char file1Path[100];
+        //sprintf(file1Path, "%s%s%s.%d", userDirPath, "/", fileName, fileMember1);
+        sprintf(file1Path, "%s%s%s%s%s%d", userDirPath, "/", ".", fileName, ".", fileMember1);
+        PRINT_DEBUG_MESSAGE("File1Path: %s\n", file1Path);
+        
+        FILE *fptr = fopen(file1Path, "r");
+        if (fptr)
+        {
+            fseek(fptr, 0, SEEK_END);
+            filePart1Size = (int)ftell(fptr);
+            fseek(fptr, 0, SEEK_SET);
+            fclose(fptr);
+        }
+        
+        char file2Path[100];
+        //sprintf(file2Path, "%s%s%s.%d", userDirPath, "/", fileName, fileMember2);
+        sprintf(file2Path, "%s%s%s%s%s%d", userDirPath, "/", ".", fileName, ".", fileMember2);
+        PRINT_DEBUG_MESSAGE("File2Path: %s\n", file2Path);
+        
+        FILE *fptr2 = fopen(file2Path, "r");
+        if (fptr)
+        {
+            fseek(fptr, 0, SEEK_END);
+            filePart2Size = (int)ftell(fptr2);
+            fseek(fptr, 0, SEEK_SET);
+            fclose(fptr2);
+        }
+        
+        PRINT_DEBUG_MESSAGE("FileMembers: (%d, %d), FilePartSizes: (%d, %d)\n",
+                            fileMember1, fileMember2, filePart1Size, filePart2Size);
+    
         sprintf(responseMsg, "file1:%s file2:%s fileMember1:%d fileMember2:%d filePart1Size:%d filePart2Size:%d",
                 file1Name, file2Name, fileMember1, fileMember2, filePart1Size, filePart2Size);
         
@@ -712,67 +715,77 @@ int handleGetRequest(int clientSock, char *fileDataBuffer)
         memset(reqBuffer, '\0', sizeof(reqBuffer));
         read(clientSock, reqBuffer, sizeof(reqBuffer));
         
-        printf("Request Buffer: %s\n", reqBuffer);
-        
-        char filePart1Name[50];
-        parseReqMsg(reqBuffer, filePart1Name);
-        
-        int sentSize = 0;
-        char file1path[100];
-        sprintf(file1path, "%s%s%s", userDirPath, "/", filePart1Name);
-        
-        int copySize = -1;
-        FILE *fptr = fopen(file1path, "r");
-        if (fptr)
+        if (*reqBuffer != '\0')
         {
-            char transmitBuffer[1024];
-            while(sentSize < filePart1Size)
+            printf("Request Buffer: %s\n", reqBuffer);
+        
+            char filePart1Name[50];
+            memset(filePart1Name, '\0', sizeof(filePart1Name));
+            parseReqMsg(reqBuffer, filePart1Name);
+            
+            int sentSize = 0;
+            int copySize = -1;
+            
+            char file1path[100];
+            sprintf(file1path, "%s%s%s", userDirPath, "/", filePart1Name);
+            
+            FILE *fptr = fopen(file1path, "r");
+            if (fptr)
             {
-                copySize = min(sizeof(transmitBuffer), (filePart1Size - sentSize));
-                memset(transmitBuffer, '\0', sizeof(transmitBuffer));
-                fread(transmitBuffer, sizeof(char), copySize, fptr);
-                
-                write(clientSock, transmitBuffer, copySize);
-                sentSize += copySize;
+                char transmitBuffer[1024];
+                while(sentSize < filePart1Size)
+                {
+                    copySize = min(sizeof(transmitBuffer), (filePart1Size - sentSize));
+                    memset(transmitBuffer, '\0', sizeof(transmitBuffer));
+                    fread(transmitBuffer, sizeof(char), copySize, fptr);
+                    
+                    write(clientSock, transmitBuffer, copySize);
+                    sentSize += copySize;
+                }
+                fclose(fptr);
             }
-            fclose(fptr);
         }
         
         memset(reqBuffer, '\0', sizeof(reqBuffer));
         read(clientSock, reqBuffer, sizeof(reqBuffer));
         
-        printf("Request Buffer: %s\n", reqBuffer);
-        
-        char filePart2Name[50];
-        parseReqMsg(reqBuffer, filePart2Name);
-        
-        sentSize = 0;
-        char file2path[100];
-        sprintf(file2path, "%s%s%s", userDirPath, "/", filePart2Name);
-        
-        copySize = -1;
-        FILE *fptr2 = fopen(file2path, "r");
-        if (fptr2)
+        if (*reqBuffer != '\0')
         {
-            char transmitBuffer[1024];
-            while(sentSize < filePart2Size)
+            printf("Request Buffer: %s\n", reqBuffer);
+        
+            char filePart2Name[50];
+            memset(filePart2Name, '\0', sizeof(filePart2Name));
+            parseReqMsg(reqBuffer, filePart2Name);
+        
+            int sentSize = 0;
+            int copySize = -1;
+            
+            char file2path[100];
+            sprintf(file2path, "%s%s%s", userDirPath, "/", filePart2Name);
+            
+            FILE *fptr2 = fopen(file2path, "r");
+            if (fptr2)
             {
-                copySize = min(sizeof(transmitBuffer), (filePart2Size - sentSize));
-                memset(transmitBuffer, '\0', sizeof(transmitBuffer));
-                fread(transmitBuffer, sizeof(char), copySize, fptr2);
-                
-                write(clientSock, transmitBuffer, copySize);
-                sentSize += copySize;
+                char transmitBuffer[1024];
+                while(sentSize < filePart2Size)
+                {
+                    copySize = min(sizeof(transmitBuffer), (filePart2Size - sentSize));
+                    memset(transmitBuffer, '\0', sizeof(transmitBuffer));
+                    fread(transmitBuffer, sizeof(char), copySize, fptr2);
+                    
+                    write(clientSock, transmitBuffer, copySize);
+                    sentSize += copySize;
+                }
+                fclose(fptr2);
             }
-            fclose(fptr2);
         }
         
         retVal = 0;
     }
     else
     {
-        printf("Match not found\n");
-        sprintf(responseMsg, "Invalid Username/Password. Please try again");
+        printf("Files not found\n");
+        sprintf(responseMsg, "Files not found");
         
         write(clientSock, responseMsg, strlen(responseMsg));
         retVal = -1;
@@ -836,7 +849,7 @@ void extractGetReqParams(char *fileDataBuffer, char *userName, char *password,
     }
 }
 
-void checkForFileInDir(char *fileName, char *userDirPath, bool *fileFound,
+void checkForFileInDir(char *fileName, char *userDirPath, bool *file1Found, bool *file2Found,
                        int *fileMember1, int *fileMember2, char *file1, char *file2)
 {
     DIR *d;
@@ -859,10 +872,12 @@ void checkForFileInDir(char *fileName, char *userDirPath, bool *fileFound,
                 if (*file1 == '\0')
                 {
                     strcpy(file1, dir->d_name);
+                    *file1Found = true;
                 }
                 else
                 {
                     strcpy(file2, dir->d_name);
+                    *file2Found = true;
                 }
                 
                 char filePartName[100];
@@ -886,7 +901,6 @@ void checkForFileInDir(char *fileName, char *userDirPath, bool *fileFound,
                     if (*fileMember2 == 0)
                     {
                         *fileMember2 = atoi(prevFileMemberToken);
-                        *fileFound = true;
                     }
                 }
             }
