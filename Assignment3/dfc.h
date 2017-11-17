@@ -116,7 +116,7 @@ static void intializeDfsFilePairMembers(dfsFilePairMembers *dfs1Members, dfsFile
                                         dfsFilePairMembers *dfs3Members, dfsFilePairMembers *dfs4Members);
 char * xorencrypt(char * message, char * key);
 
-static int getFileFromDFSServers(char *fileName);
+static int getFileFromDFSServers(char *fileName, char *subfolderName);
 static int getFileInfoFromDFSServers(char *dfsName, dfsFilePairMembers *dfsMembers, char *fileName, char *headerMsg);
 static int getFileInfoFromDFSServer(char *headerMsg, int dfsServerSock, struct sockaddr_in dfsServerSockAddr,
                                     dfsFilePairMembers *dfsMembers, int *filePart1Size, int *filePart2Size);
@@ -130,7 +130,7 @@ static bool checkIfFilesCanBeCombined(dfsFilePairMembers dfs1Members, dfsFilePai
 static void combineFiles(char *fileName);
 void combineIndividualFiles(FILE *fpWrite, char *filePartPath);
 
-static int listFilesFromDFSServers();
+static int listFilesFromDFSServers(char *subfolderName);
 static int listFilesFromIndividualDFSServer(char *dfsName, char *headerMsg, char *fileListBuffer);
 static int listAllFilesFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSockAddr,
                                      char *headerMsg, char *fileListBuffer);

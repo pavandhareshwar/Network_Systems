@@ -64,14 +64,15 @@ static void extractPutReqParams(char *fileDataBuffer, char *userName, char *pass
                                 int *fileMember2, int *fileSize1, int *fileSize2);
 
 static int handleGetRequest(int clientSock, char *fileDataBuffer);
-static void extractGetReqParams(char *fileDataBuffer, char *userName, char *password, char *fileName);
+static void extractGetReqParams(char *fileDataBuffer, char *userName, char *password,
+                                char *fileName, char *subfolderName);
 static void checkForFileInDir(char *fileName, char *userDirPath, bool *fileFound,
                               int *fileMember1, int *fileMember2, char *file1, char *file2);
 static void parseReqMsg(char *reqBuffer, char *filePartName);
 
 static int handleListRequest(int clientSock, char *fileDataBuffer);
-static void listFilesInDir(char *dirPath, int indent, char *fileList);
-static void extractListReqParams(char *fileDataBuffer, char *userName, char *password);
+static int listFilesInDir(char *dirPath, int indent, char *fileList);
+static void extractListReqParams(char *fileDataBuffer, char *userName, char *password, char *subfolderName);
 
 static int handleMkdirRequest(int clientSock, char *fileDataBuffer);
 static void extractMkdirReqParams(char *fileDataBuffer, char *userName, char *password, char *subfolderName);

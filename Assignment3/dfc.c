@@ -125,7 +125,7 @@ int main(int argc, char *argv[])
         /*  TODO: List should only list files under the specified
          username folder. Change the code to do this instead.
          */
-        int listFilesRetVal = listFilesFromDFSServers();
+        int listFilesRetVal = listFilesFromDFSServers(subfolder);
         if (listFilesRetVal)
         {
             printf("listFileFromDFSServers function failed\n");
@@ -147,7 +147,7 @@ int main(int argc, char *argv[])
             printf("\n");
         }
         
-        int getFilesRetVal = getFileFromDFSServers(fileName);
+        int getFilesRetVal = getFileFromDFSServers(fileName, subfolder);
         if (getFilesRetVal)
         {
             printf("getFilesFromDFSServers function failed\n");
@@ -580,7 +580,6 @@ int sendFilesToDFSServers(char *fileName, char *subfolderName)
         /* Sending files to DFS1 */
         retVal = sendFileDataToDFSServer("DFS1", dfs1Members, fileName, headerMessage);
 
-#if 1
         /* Sending files to DFS2 */
         retVal = sendFileDataToDFSServer("DFS2", dfs2Members, fileName, headerMessage);
         
@@ -589,7 +588,6 @@ int sendFilesToDFSServers(char *fileName, char *subfolderName)
         
         /* Sending files to DFS4 */
         retVal = sendFileDataToDFSServer("DFS4", dfs4Members, fileName, headerMessage);
-#endif
         
     }
     
@@ -882,13 +880,13 @@ int sendFileToDFSServer(char *fileName, char *headerMsg, int dfsServerSock,
                             /* Do Nothing */
                             break;
                         case 2:
-                            fseek(fp, fileSize1ToSend, SEEK_SET);
+                            fseek(fp, min(fileSize1ToSend, fileSize2ToSend), SEEK_SET);
                             break;
                         case 3:
-                            fseek(fp, 2*fileSize1ToSend, SEEK_SET);
+                            fseek(fp, 2*min(fileSize1ToSend, fileSize2ToSend), SEEK_SET);
                             break;
                         case 4:
-                            fseek(fp, 3*fileSize1ToSend, SEEK_SET);
+                            fseek(fp, 3*min(fileSize1ToSend, fileSize2ToSend), SEEK_SET);
                             break;
                     }
                     
@@ -923,6 +921,7 @@ int sendFileToDFSServer(char *fileName, char *headerMsg, int dfsServerSock,
                     {
                         fseek(fp, 0, SEEK_SET);
                     }
+                    
                     int copysize = -1;
                     sentSize = 0;
                     while (sentSize < fileSize2ToSend)
@@ -995,7 +994,7 @@ char * xorencrypt(char * message, char * key)
     return encrypted;
 }
 
-int getFileFromDFSServers(char *fileName)
+int getFileFromDFSServers(char *fileName, char *subfolderName)
 {
     int retVal = -1;
     
@@ -1007,8 +1006,17 @@ int getFileFromDFSServers(char *fileName)
     intializeDfsFilePairMembers(&dfs1Members, &dfs2Members, &dfs3Members, &dfs4Members);
     
     char headerMessage[100];
-    sprintf(headerMessage, "username:%s password:%s command:%s filename:%s",
-            dfcConfigParams.userName, dfcConfigParams.password, "GET", fileName);
+    if (*subfolderName == '\0')
+    {
+        sprintf(headerMessage, "username:%s password:%s command:%s filename:%s subfolder:%s",
+                dfcConfigParams.userName, dfcConfigParams.password, "GET", fileName, "Nil");
+    }
+    else
+    {
+        sprintf(headerMessage, "username:%s password:%s command:%s filename:%s subfolder:%s",
+                dfcConfigParams.userName, dfcConfigParams.password, "GET", fileName, subfolderName);
+    }
+    
     
     /* Getting files from DFS1 */
     retVal = getFileInfoFromDFSServers("DFS1", &dfs1Members, fileName, headerMessage);
@@ -1273,7 +1281,7 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
             {
                 sizeToRead = min(sizeof(receiveBuffer), (filePart1Size - readSize));
                 memset(receiveBuffer, '\0', sizeof(receiveBuffer));
-                read(dfsServerSock, receiveBuffer, sizeToRead-1);
+                read(dfsServerSock, receiveBuffer, sizeToRead);
                 
 #ifdef ENCRYPTION
                 char * decrypted = xorencrypt(receiveBuffer, dfcConfigParams.password);
@@ -1294,7 +1302,7 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
             fclose(fptr);
         }
         
-        memset(command, 0, sizeof(command));
+        memset(command, '\0', sizeof(command));
         //sprintf(command, "%s %s.%d", "GET", fileName, dfsMembers->fileMember2);
         sprintf(command, "%s %s", "GET", dfsMembers->fileMember2Name);
         
@@ -1318,6 +1326,7 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
             printf("filePart2Name:%s\n", filePart2Name);
             
             readSize = 0;
+            sizeToRead = -1;
             
             fptr2 = fopen(filePart2Name, "w");
             if (fptr2)
@@ -1327,7 +1336,7 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
                 {
                     sizeToRead = min(sizeof(receiveBuffer), (filePart2Size - readSize));
                     memset(receiveBuffer, '\0', sizeof(receiveBuffer));
-                    read(dfsServerSock, receiveBuffer, sizeToRead-1);
+                    read(dfsServerSock, receiveBuffer, sizeToRead);
                     
 #ifdef ENCRYPTION
                     char * decrypted = xorencrypt(receiveBuffer, dfcConfigParams.password);
@@ -1458,7 +1467,7 @@ void combineIndividualFiles(FILE *fpWrite, char *filePartPath)
     }
 }
 
-int listFilesFromDFSServers()
+int listFilesFromDFSServers(char *subfolderName)
 {
     int retVal = -1;
     char fileListDFSServer1[1024];
@@ -1472,8 +1481,16 @@ int listFilesFromDFSServers()
     memset(fileListDFSServer4, '\0', sizeof(fileListDFSServer4));
     
     char headerMessage[100];
-    sprintf(headerMessage, "command:%s username:%s password:%s",
-            "LIST", dfcConfigParams.userName, dfcConfigParams.password);
+    if (*subfolderName == '\0')
+    {
+        sprintf(headerMessage, "command:%s username:%s password:%s subfolder:%s",
+                "LIST", dfcConfigParams.userName, dfcConfigParams.password, "Nil");
+    }
+    else
+    {
+        sprintf(headerMessage, "command:%s username:%s password:%s subfolder:%s",
+                "LIST", dfcConfigParams.userName, dfcConfigParams.password, subfolderName);
+    }
     
     /* Getting files from DFS1 */
     listFilesFromIndividualDFSServer("DFS1", headerMessage, fileListDFSServer1);
@@ -1511,28 +1528,42 @@ int listFilesFromIndividualDFSServer(char *dfsName, char *headerMsg, char *fileL
 {
     int retVal = -1;
     
-    
     if (strcmp(dfsName, "DFS1") == 0)
     {
-        listAllFilesFromDFSServer(dfs1ServerSock, dfs1ServerSockAddr, headerMsg, fileListBuffer);
+        int retVal = listAllFilesFromDFSServer(dfs1ServerSock, dfs1ServerSockAddr, headerMsg, fileListBuffer);
+        if (retVal)
+        {
+            printf("SubFolder doesn't exist on DFS1\n");
+        }
     }
     else if (strcmp(dfsName, "DFS2") == 0)
     {
-        listAllFilesFromDFSServer(dfs2ServerSock, dfs2ServerSockAddr, headerMsg, fileListBuffer);
+        int retVal = listAllFilesFromDFSServer(dfs2ServerSock, dfs2ServerSockAddr, headerMsg, fileListBuffer);
+        if (retVal)
+        {
+            printf("SubFolder doesn't exist on DFS2\n");
+        }
     }
     else if (strcmp(dfsName, "DFS3") == 0)
     {
-        listAllFilesFromDFSServer(dfs3ServerSock, dfs3ServerSockAddr, headerMsg, fileListBuffer);
+        int retVal = listAllFilesFromDFSServer(dfs3ServerSock, dfs3ServerSockAddr, headerMsg, fileListBuffer);
+        if (retVal)
+        {
+            printf("SubFolder doesn't exist on DFS3\n");
+        }
     }
     else if (strcmp(dfsName, "DFS4") == 0)
     {
-        listAllFilesFromDFSServer(dfs4ServerSock, dfs4ServerSockAddr, headerMsg, fileListBuffer);
+        int retVal = listAllFilesFromDFSServer(dfs4ServerSock, dfs4ServerSockAddr, headerMsg, fileListBuffer);
+        if (retVal)
+        {
+            printf("SubFolder doesn't exist on DFS4\n");
+        }
     }
     else
     {
         /* Do Nothing */
     }
-    retVal = 0;
     
     return retVal;
 }
@@ -1544,7 +1575,6 @@ int listAllFilesFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSoc
     ssize_t n;
     
     int connRetVal = connect(dfsServerSock, (struct sockaddr *)&dfsServerSockAddr, sizeof(dfsServerSockAddr));
-    printf("connRetVal: %d\n", connRetVal);
     if (connRetVal == 0)
     {
         /* send the message line to the server */
@@ -1563,8 +1593,14 @@ int listAllFilesFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSoc
             if (strstr(responseBuffer, "Valid"))
             {
                 read(dfsServerSock, fileListBuffer, 1024);
-                
-                retVal = 0;
+                if (strstr(fileListBuffer, "Error:"))
+                {
+                    retVal = -1;
+                }
+                else
+                {
+                    retVal = 0;
+                }
             }
         }
     }
@@ -1690,7 +1726,7 @@ void findFilesFromDFSServerFileList(char *fileListDFSServer1, char *fileListDFSS
         }
         PRINT_DEBUG_MESSAGE("dfsServerFileListFileCount[%d]: %d\n", i, dfsServerFileListFileCount[i]);
     }
-    
+
     printf("================================================================\n");
     
     for (int i = 0; i < dfsServerFileListUserCount; i++)
@@ -1701,8 +1737,8 @@ void findFilesFromDFSServerFileList(char *fileListDFSServer1, char *fileListDFSS
             xDfsServerFileList.userFileNames[i][length-1] = '\0';
         }
         
-        printf("%d -- Userfolder: %s, FileList: %s, FileNames: %s\n", i, xDfsServerFileList.userFolder[i],
-               xDfsServerFileList.userFileList[i], xDfsServerFileList.userFileNames[i]);
+        //printf("%d -- Userfolder: %s, FileList: %s, FileNames: %s\n", i, xDfsServerFileList.userFolder[i],
+        //       xDfsServerFileList.userFileList[i], xDfsServerFileList.userFileNames[i]);
         
         bool complete = false;
         char fileName1ToTest[100];
@@ -1748,66 +1784,82 @@ void findFilesFromDFSServerFileList(char *fileListDFSServer1, char *fileListDFSS
 void filldfsServerFileListInClient(char *dfsServerFileList)
 {
     char commaDeLimiter[] = ",";
-    char slashDeLimiter[] = "/";
+    char doubleSlashDeLimiter[] = "//";
     
     char *endStr;
     char *token = strtok_r(dfsServerFileList, commaDeLimiter, &endStr);
     while(token != NULL)
     {
-        char *endToken;
+        char tokenCopy[100];
+        memset(tokenCopy, '\0', sizeof(tokenCopy));
+        strcpy(tokenCopy, token);
         
-        char *token2 = strtok_r(token, slashDeLimiter, &endToken);
+        bool matchFound = false;
+        int matchedUserFolderIndex = -1;
+        char *token2 = strstr(tokenCopy, doubleSlashDeLimiter);
         if (token2 != NULL)
         {
-            bool matchFound = false;
-            int matchedUserFolderIndex = -1;
-            for (int i = 0; i < MAX_USER_FOLDERS; i++)
+            char *token3 = strtok(tokenCopy, doubleSlashDeLimiter);
+            if (token3)
             {
-                if (strcmp(xDfsServerFileList.userFolder[i], token2) == 0)
+                for (int i = 0; i < MAX_USER_FOLDERS; i++)
                 {
-                    matchFound = true;
-                    matchedUserFolderIndex = i;
-                    //printf("Match found\n");
-                    break;
+                    if (strcmp(xDfsServerFileList.userFolder[i], token3) == 0)
+                    {
+                        matchFound = true;
+                        matchedUserFolderIndex = i;
+                        //printf("Match found\n");
+                        break;
+                    }
                 }
+                
+                token3 = strtok(NULL, doubleSlashDeLimiter);
+                if (*token3 == '.')
+                {
+                    memcpy(token3, token3+1, strlen(token3));
+                }
+                
+                if (matchFound == false)
+                {
+                    printf("No match found\n");
+                    strcpy(xDfsServerFileList.userFolder[dfsServerFileListUserCount], tokenCopy);
+                    
+                    dfsServerFileListUserCount++;
+                
+                    char fileListEntry[50];
+                    memset(fileListEntry, '\0', sizeof(fileListEntry));
+                    sprintf(fileListEntry, "%s%s", token3, ",");
+                    strcat(xDfsServerFileList.userFileList[dfsServerFileListUserCount], fileListEntry);
+                }
+                else
+                {
+                    char fileListEntry[50];
+                    memset(fileListEntry, '\0', sizeof(fileListEntry));
+                    sprintf(fileListEntry, "%s%s", token3, ",");
+                    strcat(xDfsServerFileList.userFileList[matchedUserFolderIndex], fileListEntry);
+                }
+            }
+        }
+        else
+        {
+            if (dfsServerFileListUserCount == 0)
+            {
+                dfsServerFileListUserCount = 1;
+            }
+            if (*(tokenCopy) == '.')
+            {
+                memcpy(tokenCopy, tokenCopy+1, strlen(tokenCopy));
             }
             
-            if (matchFound == false)
-            {
-                //printf("No match found\n");
-                strcpy(xDfsServerFileList.userFolder[dfsServerFileListUserCount], token2);
-                token2 = strtok_r(NULL, slashDeLimiter, &endToken);
-                
-                if (*(token2) == '.')
-                {
-                    memcpy(token2, token2+1, strlen(token2));
-                }
-                
-                char fileListEntry[50];
-                memset(fileListEntry, '\0', sizeof(fileListEntry));
-                sprintf(fileListEntry, "%s%s", token2, ",");
-                strcat(xDfsServerFileList.userFileList[dfsServerFileListUserCount], fileListEntry);
-                
-                dfsServerFileListUserCount++;
-            }
-            else
-            {
-                token2 = strtok_r(NULL, slashDeLimiter, &endToken);
-                
-                if (*(token2) == '.')
-                {
-                    memcpy(token2, token2+1, strlen(token2));
-                }
-                
-                char fileListEntry[50];
-                memset(fileListEntry, '\0', sizeof(fileListEntry));
-                sprintf(fileListEntry, "%s%s", token2, ",");
-                strcat(xDfsServerFileList.userFileList[matchedUserFolderIndex], fileListEntry);
-            }
+            char fileListEntry[50];
+            memset(fileListEntry, '\0', sizeof(fileListEntry));
+            sprintf(fileListEntry, "%s%s", tokenCopy, ",");
+            strcat(xDfsServerFileList.userFileList[0], fileListEntry);
         }
         
         token = strtok_r(NULL, commaDeLimiter, &endStr);
     }
+    strcpy(xDfsServerFileList.userFolder[0], ".");
 }
 
 void findFilesFromIndividualDFSServerFileList(char *fileListDFSServer, char *dfsServerFileList)
@@ -1828,16 +1880,40 @@ void findFilesFromIndividualDFSServerFileList(char *fileListDFSServer, char *dfs
         if (subStr != NULL)
         {
             memcpy(subStr, subStr+2, strlen(subStr));
+            
             int length = (int)strlen(subStr);
+
             if ((*(subStr+length-1) == '.' && *(subStr+length-2) == '/') ||
                 (*(subStr+length-1) == '.' && *(subStr+length-2) == '.' && *(subStr+length-3) == '/'))
             {
                 continue;
             }
+            
             char fileName[100];
             memset(fileName, '\0', sizeof(fileName));
-            sprintf(fileName, "%s%s", subStr, ",");
-            strcat(dfsServerFileList, fileName);
+#if 0
+            if (*subStr != '.')
+            {
+                /* There is a username specific subfolder */
+                char tokenCopy[100];
+                memset(tokenCopy, '\0', sizeof(tokenCopy));
+                strcpy(tokenCopy, token);
+                char *token2 = strstr(tokenCopy, doubleSlashDelimiter);
+                printf("token2: %s\n", token2);
+                if (token2)
+                {
+                    memcpy(token2, token2+2, strlen(subStr));
+                        
+                    sprintf(fileName, "%s%s", token2, ",");
+                    strcat(dfsServerFileList, fileName);
+                }
+            }
+            else
+#endif
+            {
+                sprintf(fileName, "%s%s", subStr, ",");
+                strcat(dfsServerFileList, fileName);
+            }
         }
         token = strtok_r(NULL, commaDelimiter, &endStr);
     }
