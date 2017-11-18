@@ -44,161 +44,159 @@ int main(int argc, char *argv[])
     timeout.tv_sec = 1;
     timeout.tv_usec = 0;
     
-    /*  Create a TCP server sockets */
-    int createTcpSockRetVal = createDFSServerSockets();
-    if (createTcpSockRetVal)
-    {
-        PRINT_DEBUG_MESSAGE("createDFSServerSockets function failed\n");
-    }
-    
-    //char *file = "test_file.txt";
-    //char *file = "1.txt";
-    //char *file = "test_image.jpg";
-    //char *file = "SampleImage2.jpg";
-    //char *file =  "testFile.txt";
-    
     char userInput[100];
-    printf("Enter the command that the client needs to send to the server:\n");
-    printf("1 : LIST\n");
-    printf("2 : GET <filename> <subfolder>\n");
-    printf("3 : PUT <filename> <subfolder>\n");
-    printf("4 : MKDIR <subfolder>\n");
-    printf("6 : unsupported\n");
     
-    gets(userInput);
-    
-    printf("userInput: %s\n", userInput);
-    
-    char commandName[10];
-    char fileName[100];
-    char subfolder[100];
-    
-    memset(commandName, '\0', sizeof(commandName));
-    memset(fileName, '\0', sizeof(fileName));
-    memset(subfolder, '\0', sizeof(subfolder));
-    
-    char spaceDeLimiter[] = " ";
-    char *token = strtok(userInput, spaceDeLimiter);
-    
-    if (token)
+    while (1)
     {
-        strcpy(commandName, token);
+        /*  Create a TCP server sockets */
+        int createTcpSockRetVal = createDFSServerSockets();
+        if (createTcpSockRetVal)
+        {
+            PRINT_DEBUG_MESSAGE("createDFSServerSockets function failed\n");
+        }
         
-        token = strtok(NULL, spaceDeLimiter);
+        memset(userInput, '\0', sizeof(userInput));
+        
+        printf("Enter the command that the client needs to send to the server:\n");
+        printf("LIST\n");
+        printf("GET <filename> <subfolder>\n");
+        printf("PUT <filename> <subfolder>\n");
+        printf("MKDIR <subfolder>\n");
+        
+        gets(userInput);
+        
+        printf("userInput: %s\n", userInput);
+        
+        char commandName[10];
+        char fileName[100];
+        char subfolder[100];
+        
+        memset(commandName, '\0', sizeof(commandName));
+        memset(fileName, '\0', sizeof(fileName));
+        memset(subfolder, '\0', sizeof(subfolder));
+        
+        char spaceDeLimiter[] = " ";
+        char *token = strtok(userInput, spaceDeLimiter);
+        
         if (token)
         {
-            if ((strcmp(commandName, "GET") == 0) || (strcmp(commandName, "PUT") == 0))
+            strcpy(commandName, token);
+            
+            token = strtok(NULL, spaceDeLimiter);
+            if (token)
             {
-                strcpy(fileName, token);
+                if ((strcmp(commandName, "GET") == 0) || (strcmp(commandName, "PUT") == 0))
+                {
+                    strcpy(fileName, token);
+                }
+                else if ((strcmp(commandName, "LIST") == 0) || (strcmp(commandName, "MKDIR") == 0))
+                {
+                    strcpy(subfolder, token);
+                }
             }
-            else if ((strcmp(commandName, "LIST") == 0) || (strcmp(commandName, "MKDIR") == 0))
+            
+            token = strtok(NULL, spaceDeLimiter);
+            if (token)
             {
-                strcpy(subfolder, token);
+                if ((strcmp(commandName, "GET") == 0) || (strcmp(commandName, "PUT") == 0))
+                {
+                    strcpy(subfolder, token);
+                }
             }
         }
         
-        token = strtok(NULL, spaceDeLimiter);
-        if (token)
+        if (strcmp(commandName, "LIST") == 0)
         {
-            if ((strcmp(commandName, "GET") == 0) || (strcmp(commandName, "PUT") == 0))
+            printf("Command: %s", commandName);
+            if (*subfolder != '\0')
             {
-                strcpy(subfolder, token);
+                printf(" subFolder: %s\n", subfolder);
+            }
+            else
+            {
+                printf("\n");
+            }
+            
+            memset(&xDfsServerFileList, '\0', sizeof(xDfsServerFileList));
+            dfsServerFileListUserCount = 0;
+            
+            int listFilesRetVal = listFilesFromDFSServers(subfolder);
+            if (listFilesRetVal)
+            {
+                printf("listFileFromDFSServers function failed\n");
+            }
+            else
+            {
+                printf("listFileFromDFSServers success\n");
             }
         }
-    }
-    
-    if (strcmp(commandName, "LIST") == 0)
-    {
-        printf("Command: %s", commandName);
-        if (*subfolder != '\0')
+        else if (strcmp(commandName, "GET") == 0)
         {
-            printf(" subFolder: %s\n", subfolder);
+            printf("Command: %s, fileName: %s", commandName, fileName);
+            if (*subfolder != '\0')
+            {
+                printf(" subFolder: %s\n", subfolder);
+            }
+            else
+            {
+                printf("\n");
+            }
+            
+            dfsFilePartsRcvdFromDFSServers.dfsFilePart1 = false;
+            dfsFilePartsRcvdFromDFSServers.dfsFilePart2 = false;
+            dfsFilePartsRcvdFromDFSServers.dfsFilePart3 = false;
+            dfsFilePartsRcvdFromDFSServers.dfsFilePart4 = false;
+            
+            int getFilesRetVal = getFileFromDFSServers(fileName, subfolder);
+            if (getFilesRetVal)
+            {
+                printf("getFilesFromDFSServers function failed\n");
+            }
+            else
+            {
+                printf("getFilesFromDFSServers success\n");
+            }
+        }
+        else if (strcmp(commandName, "PUT") == 0)
+        {
+            printf("Command: %s, fileName: %s", commandName, fileName);
+            if (*subfolder != '\0')
+            {
+                printf(" subFolder: %s\n", subfolder);
+            }
+            else
+            {
+                printf("\n");
+            }
+            
+            int sendFilesRetVal = sendFilesToDFSServers(fileName, subfolder);
+            if (sendFilesRetVal)
+            {
+                printf("sendFilesToDFSServers function failed\n");
+            }
+            else
+            {
+                printf("sendFilesToDFSServers success\n");
+            }
+        }
+        else if (strcmp(commandName, "MKDIR") == 0)
+        {
+            printf("Command: %s, subFolder: %s", commandName, subfolder);
+            int createSubFolderRetVal = createSubFolderonDFS(subfolder);
+            if (createSubFolderRetVal)
+            {
+                printf("createSubFolderonDFS function failed\n");
+            }
+            else
+            {
+                printf("createSubFolderonDFS success\n");
+            }
         }
         else
         {
-            printf("\n");
-        }
-        
-        memset(&xDfsServerFileList, '\0', sizeof(xDfsServerFileList));
-        dfsServerFileListUserCount = 0;
-        
-        int listFilesRetVal = listFilesFromDFSServers(subfolder);
-        if (listFilesRetVal)
-        {
-            printf("listFileFromDFSServers function failed\n");
-        }
-        else
-        {
-            printf("listFileFromDFSServers success\n");
-        }
-    }
-    else if (strcmp(commandName, "GET") == 0)
-    {
-        printf("Command: %s, fileName: %s", commandName, fileName);
-        if (*subfolder != '\0')
-        {
-            printf(" subFolder: %s\n", subfolder);
-        }
-        else
-        {
-            printf("\n");
-        }
-        
-        dfsFilePartsRcvdFromDFSServers.dfsFilePart1 = false;
-        dfsFilePartsRcvdFromDFSServers.dfsFilePart2 = false;
-        dfsFilePartsRcvdFromDFSServers.dfsFilePart3 = false;
-        dfsFilePartsRcvdFromDFSServers.dfsFilePart4 = false;
-        
-        int getFilesRetVal = getFileFromDFSServers(fileName, subfolder);
-        if (getFilesRetVal)
-        {
-            printf("getFilesFromDFSServers function failed\n");
-        }
-        else
-        {
-            printf("getFilesFromDFSServers success\n");
-        }
-    }
-    else if (strcmp(commandName, "PUT") == 0)
-    {
-        printf("Command: %s, fileName: %s", commandName, fileName);
-        if (*subfolder != '\0')
-        {
-            printf(" subFolder: %s\n", subfolder);
-        }
-        else
-        {
-            printf("\n");
-        }
-        
-        int sendFilesRetVal = sendFilesToDFSServers(fileName, subfolder);
-        if (sendFilesRetVal)
-        {
-            printf("sendFilesToDFSServers function failed\n");
-        }
-        else
-        {
-            printf("sendFilesToDFSServers success\n");
+            /* Do Nothing */
         }
     }
-    else if (strcmp(commandName, "MKDIR") == 0)
-    {
-        printf("Command: %s, subFolder: %s", commandName, subfolder);
-        int createSubFolderRetVal = createSubFolderonDFS(subfolder);
-        if (createSubFolderRetVal)
-        {
-            printf("createSubFolderonDFS function failed\n");
-        }
-        else
-        {
-            printf("createSubFolderonDFS success\n");
-        }
-    }
-    else
-    {
-        /* Do Nothing */
-    }
-    
     return 0;
 }
 
@@ -582,6 +580,7 @@ int sendFilesToDFSServers(char *fileName, char *subfolderName)
         /* Sending files to DFS1 */
         retVal = sendFileDataToDFSServer("DFS1", dfs1Members, fileName, headerMessage);
 
+#if 1
         /* Sending files to DFS2 */
         retVal = sendFileDataToDFSServer("DFS2", dfs2Members, fileName, headerMessage);
         
@@ -590,7 +589,7 @@ int sendFilesToDFSServers(char *fileName, char *subfolderName)
         
         /* Sending files to DFS4 */
         retVal = sendFileDataToDFSServer("DFS4", dfs4Members, fileName, headerMessage);
-        
+#endif
     }
     
     return retVal;
@@ -853,7 +852,8 @@ int sendFileToDFSServer(char *fileName, char *headerMsg, int dfsServerSock,
     int retVal = -1;
     ssize_t n;
     
-    int connRetVal = connect(dfsServerSock, (struct sockaddr *)&dfsServerSockAddr, sizeof(dfsServerSockAddr));
+    //int connRetVal = connect(dfsServerSock, (struct sockaddr *)&dfsServerSockAddr, sizeof(dfsServerSockAddr));
+    int connRetVal = connectWithTimeOut(dfsServerSock, dfsServerSockAddr);
     if (connRetVal == 0)
     {
         /* send the message line to the server */
@@ -892,23 +892,26 @@ int sendFileToDFSServer(char *fileName, char *headerMsg, int dfsServerSock,
                             break;
                     }
                     
+#ifdef ENCRYPTION
+                    char encryptBuffer[2*1024];
+#endif
+                    int copysize = -1;
                     while (sentSize < fileSize1ToSend)
                     {
-                        int copysize = min(sizeof(transmitBuffer), (fileSize1ToSend - sentSize));
+                        copysize = min(sizeof(transmitBuffer), (fileSize1ToSend - sentSize));
                         memset(transmitBuffer, '\0', sizeof(transmitBuffer));
                         fread(transmitBuffer, sizeof(char), copysize, fp);
-                        
 #ifdef ENCRYPTION
-                        char * encrypted = xorencrypt(transmitBuffer, dfcConfigParams.password);
                         
-                        n = write(dfsServerSock, encrypted, copysize);
+                        memset(encryptBuffer, '\0', sizeof(encryptBuffer));
+                        strcpy(encryptBuffer, transmitBuffer);
+                        
+                        xorencryptdecrypt(encryptBuffer, dfcConfigParams.password);
+                        
+                        n = write(dfsServerSock, encryptBuffer, copysize);
                         if (n < 0)
                             perror("ERROR writing to socket");
-                        
-                        free(encrypted);
 #else
-                        
-                        /* TODO: Encrypt the data here before sending */
                         n = write(dfsServerSock, transmitBuffer, copysize);
                         if (n < 0)
                             perror("ERROR writing to socket");
@@ -924,7 +927,7 @@ int sendFileToDFSServer(char *fileName, char *headerMsg, int dfsServerSock,
                         fseek(fp, 0, SEEK_SET);
                     }
                     
-                    int copysize = -1;
+                    copysize = -1;
                     sentSize = 0;
                     while (sentSize < fileSize2ToSend)
                     {
@@ -933,30 +936,28 @@ int sendFileToDFSServer(char *fileName, char *headerMsg, int dfsServerSock,
                         fread(transmitBuffer, sizeof(char), copysize, fp);
                         
 #ifdef ENCRYPTION
-                        char * encrypted = xorencrypt(transmitBuffer, dfcConfigParams.password);
+                        memset(encryptBuffer, '\0', sizeof(encryptBuffer));
+                        strcpy(encryptBuffer, transmitBuffer);
                         
-                        n = write(dfsServerSock, encrypted, copysize);
+                        xorencryptdecrypt(encryptBuffer, dfcConfigParams.password);
+                        
+                        n = write(dfsServerSock, encryptBuffer, copysize);
                         if (n < 0)
                             perror("ERROR writing to socket");
-                        
-                        free(encrypted);
 #else
-                        
-                        /* TODO: Encrypt the data here before sending */
                         n = write(dfsServerSock, transmitBuffer, copysize);
                         if (n < 0)
                             perror("ERROR writing to socket");
 #endif
-                        
-                        n = write(dfsServerSock, transmitBuffer, copysize);
-                        if (n < 0)
-                            perror("ERROR writing to socket");
-                        
                         sentSize += copysize;
                         //printf("Sent %d bytes out of %d bytes\n", sentSize, fileSizeToSend);
                     }
+                    
+                    printf("\n");
                     printf("Sent %d bytes out of %d bytes\n", sentSize, fileSize2ToSend);
                     retVal = 0;
+                    
+                    close(dfsServerSock);
                 }
             }
             else if (strstr(responseBuffer, "Invalid") == 0)
@@ -972,28 +973,22 @@ int sendFileToDFSServer(char *fileName, char *headerMsg, int dfsServerSock,
     }
     else
     {
-        perror("ERROR connecting");
+        printf("Server not available\n");
     }
     
     return retVal;
 }
 
-char * xorencrypt(char * message, char * key)
+void xorencryptdecrypt(char *message, char *key)
 {
     size_t messagelen = strlen(message);
     size_t keylen = strlen(key);
     
-    char * encrypted = malloc(messagelen+1);
-    
-    memset(encrypted, '\0', (messagelen+1));
-    
-    int i;
-    for(i = 0; i < messagelen; i++) {
-        encrypted[i] = message[i] ^ key[i % keylen];
+    for(int i = 0; i < messagelen; i++) {
+        *(message + i) = (*(message + i) ^ *(key + (i % keylen)));
+        //printf("%c", *(message + i));
     }
-    encrypted[messagelen] = '\0';
-    
-    return encrypted;
+    //printf("\n");
 }
 
 int getFileFromDFSServers(char *fileName, char *subfolderName)
@@ -1299,6 +1294,10 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
             if (fptr)
             {
                 char receiveBuffer[1024];
+                
+#ifdef ENCRYPTION
+                char decryptBuffer[2*1024];
+#endif
                 while(readSize < filePart1Size)
                 {
                     sizeToRead = min(sizeof(receiveBuffer), (filePart1Size - readSize));
@@ -1306,11 +1305,12 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
                     read(dfsServerSock, receiveBuffer, sizeToRead);
                     
 #ifdef ENCRYPTION
-                    char * decrypted = xorencrypt(receiveBuffer, dfcConfigParams.password);
+                    memset(decryptBuffer, '\0', sizeof(decryptBuffer));
+                    strcpy(decryptBuffer, receiveBuffer);
                     
-                    fwrite(decrypted, sizeof(char), (sizeToRead-1), fptr);
+                    xorencryptdecrypt(decryptBuffer, dfcConfigParams.password);
                     
-                    free(decrypted);
+                    fwrite(decryptBuffer, sizeof(char), sizeToRead, fptr);
 #else
                     
                     fwrite(receiveBuffer, sizeof(char), sizeToRead, fptr);
@@ -1360,6 +1360,9 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
             if (fptr2)
             {
                 char receiveBuffer[1024];
+#ifdef ENCRYPTION
+                char decryptBuffer[2*1024];
+#endif
                 while(readSize < filePart2Size)
                 {
                     sizeToRead = min(sizeof(receiveBuffer), (filePart2Size - readSize));
@@ -1367,11 +1370,12 @@ int requestFileFromDFSServer(int dfsServerSock, struct sockaddr_in dfsServerSock
                     read(dfsServerSock, receiveBuffer, sizeToRead);
                     
 #ifdef ENCRYPTION
-                    char * decrypted = xorencrypt(receiveBuffer, dfcConfigParams.password);
+                    memset(decryptBuffer, '\0', sizeof(decryptBuffer));
+                    strcpy(decryptBuffer, receiveBuffer);
                     
-                    fwrite(decrypted, sizeof(char), (sizeToRead-1), fptr2);
+                    xorencryptdecrypt(decryptBuffer, dfcConfigParams.password);
                     
-                    free(decrypted);
+                    fwrite(decryptBuffer, sizeof(char), sizeToRead, fptr2);
 #else
                     
                     fwrite(receiveBuffer, sizeof(char), sizeToRead, fptr2);
@@ -2116,6 +2120,132 @@ int createSubFolderOnIndDFSServers(char *dfsName, char *headerMsg, int dfsServer
     else
     {
         perror("ERROR connecting");
+    }
+    
+    return retVal;
+}
+
+#if 0
+int connectWithTimeOut(int dfsServerSock, struct sockaddr_in dfsServerSockAddr)
+{
+    struct timeval tv;
+    int flags, n, error;
+    fd_set rdset, wrset;
+    socklen_t len;
+    
+    int timeout = 1000;
+    
+    // set the socket to nonblocking mode.
+    flags = fcntl(dfsServerSock, F_GETFL, 0);
+    if (flags != -1)
+    {
+        if (fcntl(dfsServerSock, F_SETFL, flags | O_NONBLOCK) == -1)
+        {
+            goto error;
+        }
+    }
+    else
+    {
+        goto error;
+    }
+    
+    printf("Connecting to socket with fd: %d\n", dfsServerSock);
+    n = connect(dfsServerSock, (struct sockaddr*)&dfsServerSockAddr, sizeof(dfsServerSockAddr));
+    if (n == -1)
+    {
+        printf("Error: %s\n", strerror(errno));
+        if (errno == EINPROGRESS)
+        {
+            FD_ZERO(&rdset);
+            FD_ZERO(&wrset);
+            FD_SET(dfsServerSock, &rdset);
+            FD_SET(dfsServerSock, &wrset);
+            printf("Before:: rdset: %d, wrset: %d\n", *rdset.fds_bits, *wrset.fds_bits);
+            tv.tv_sec = timeout / 1000;
+            tv.tv_usec = (timeout % 1000) * 1000;
+            //n = select(dfsSocket + 1, &rset, &wset, NULL, timeout ? &tv : NULL);
+            n = select(dfsServerSock + 1, &rdset, &wrset, NULL, &tv);
+            printf("select system call retVal: %d, rdset:%d, wrset: %d\n", n, *rdset.fds_bits, *wrset.fds_bits);
+            if (n == -1)
+            {
+                goto error;
+            }
+            else if (n == 0)
+            {
+                // timeout
+                printf("Server not available\n");
+                goto error;
+            }
+            
+            if (FD_ISSET(dfsServerSock, &rdset) || FD_ISSET(dfsServerSock, &wrset))
+            {
+                error = 0;
+                len = sizeof(error);
+                if (getsockopt(dfsServerSock, SOL_SOCKET, SO_ERROR, &error, &len) == -1)
+                {
+                    goto error;
+                }
+                
+                if (error)
+                {
+                    goto error;
+                }
+            }
+            else
+            {
+                goto error;
+            }
+        }
+        else
+        {
+            goto error;
+        }
+    }
+    else
+    {
+        printf("Connect to socket with fd: %d successful\n", dfsServerSock);
+    }
+    
+    // recover the socket state.
+    if (fcntl(dfsServerSock, F_SETFL, flags) == -1)
+    {
+        goto error;
+    }
+    
+    return 0;
+    
+error:
+    
+    if (dfsServerSock != -1)
+    {
+        close(dfsServerSock);
+    }
+    return -1;
+}
+#endif
+
+int connectWithTimeOut(int dfsServerSock, struct sockaddr_in dfsServerSockAddr)
+{
+    int n;
+    int retVal = -1;
+    
+    int i = 0;
+    while (i < 4)
+    {
+        //printf("Connecting to socket with fd: %d\n", dfsServerSock);
+        n = connect(dfsServerSock, (struct sockaddr*)&dfsServerSockAddr, sizeof(dfsServerSockAddr));
+        if (n == -1)
+        {
+            i++;
+            usleep(250*1000);
+            printf("Connect failed. Retrying\n");
+        }
+        else
+        {
+            printf("Connected to server\n");
+            retVal = 0;
+            break;
+        }
     }
     
     return retVal;

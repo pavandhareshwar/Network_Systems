@@ -66,31 +66,61 @@ int main(int argc, char *argv[])
     
     printf("Waiting for connection request from the client\n");
     
-    //sleep(30);
-    
     struct sockaddr_in clientSockAddr;
     socklen_t clientAddrLen = -1;
     
-    /* Accept an incoming connection */
-    dfsclientSockDesc = accept(dfsServerSockDesc, /* socket descriptor */
-                        (struct sockaddr *)&clientSockAddr, /* sockaddr structure */
-                        (socklen_t *)&clientAddrLen /* addrlen */);
-    if (dfsclientSockDesc < 0)
+    while (1)
     {
-        perror("Accept failed\n");
-        exit(1);
-    }
-    else
-    {
-        PRINT_DEBUG_MESSAGE("Accept success, clientSock : %d\n", dfsclientSockDesc);
-     
-        int handleReq = handleRequest(dfsclientSockDesc, fileDataBuffer);
-        if (handleReq)
+        pid_t childPid;
+        /* Accept an incoming connection */
+        dfsclientSockDesc = accept(dfsServerSockDesc, /* socket descriptor */
+                                   (struct sockaddr *)&clientSockAddr, /* sockaddr structure */
+                                   (socklen_t *)&clientAddrLen /* addrlen */);
+        if (dfsclientSockDesc < 0)
         {
-            printf("handleRequest function failed\n");
+            perror("Accept failed\n");
+            exit(1);
+        }
+        else
+        {
+            PRINT_DEBUG_MESSAGE("Accept success, clientSock : %d\n", dfsclientSockDesc);
         }
         
-        close(dfsclientSockDesc);
+        /* Using multiprocess approach here */
+        childPid = fork();
+        
+        if (childPid == 0)
+        {
+            printf("Created a child process for a new accepted connection "
+                   "PID: %d\n", getpid());
+            
+            close(dfsServerSockDesc);
+            
+            int handleReq = handleRequest(dfsclientSockDesc, fileDataBuffer);
+            if (handleReq)
+            {
+                printf("handleRequest function failed\n");
+            }
+            
+            /* Close the client socket */
+            printf("Closing client socket: %d\n", dfsclientSockDesc);
+            close(dfsclientSockDesc);
+            
+            /* Kill the child process */
+            exit(0);
+        }
+        else if (childPid > 0)
+        {
+            /* Parent process */
+            /* We close the child socket here, because we don't want the parent
+             process to receive HTTP request message on the client socket
+             */
+            close(dfsclientSockDesc);
+        }
+        else
+        {
+            printf("fork failed, %s\n", strerror(errno));
+        }
     }
 }
 

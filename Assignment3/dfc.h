@@ -123,7 +123,7 @@ static void fillFileSizeInfoInHeader(int xVal, char *headerMessage1, char *heade
 
 static void intializeDfsFilePairMembers(dfsFilePairMembers *dfs1Members, dfsFilePairMembers *dfs2Members,
                                         dfsFilePairMembers *dfs3Members, dfsFilePairMembers *dfs4Members);
-char * xorencrypt(char * message, char * key);
+void xorencryptdecrypt(char *message, char *key);
 
 static int getFileFromDFSServers(char *fileName, char *subfolderName);
 static int getFileInfoFromDFSServers(char *dfsName, dfsFilePairMembers *dfsMembers, char *fileName, char *headerMsg);
@@ -154,5 +154,7 @@ static int createSubFolderOnIndDFSServers(char *dfsName, char *headerMsg, int df
                                           struct sockaddr_in dfsServerSockAddr);
 
 static void fillFileRequestBooleans(dfsFilePairMembers *dfsMembers, bool *pRequestFile1, bool *pRequestFile2);
+
+static int connectWithTimeOut(int dfsSocket, struct sockaddr_in dfsServerSockAddr);
 
 #endif
