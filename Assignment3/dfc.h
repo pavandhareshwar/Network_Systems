@@ -7,10 +7,11 @@
  */
 
 #define min(a,b)                    ((a) < (b) ? (a) : (b))
-#define PRINT_DEBUG_MESSAGES        (1)
 #define MAX_USER_FOLDERS            (10)
 #define MAX_FILE_COUNT              (50)
-//#define ENCRYPTION                  (1)
+#define ENCRYPTION                  (1)
+
+//#define PRINT_DEBUG_MESSAGES        (1)
 
 #ifdef PRINT_DEBUG_MESSAGES
 #define PRINT_DEBUG_MESSAGE(...) do{ fprintf( stderr, __VA_ARGS__ ); } while( false )
@@ -123,7 +124,8 @@ static void fillFileSizeInfoInHeader(int xVal, char *headerMessage1, char *heade
 
 static void intializeDfsFilePairMembers(dfsFilePairMembers *dfs1Members, dfsFilePairMembers *dfs2Members,
                                         dfsFilePairMembers *dfs3Members, dfsFilePairMembers *dfs4Members);
-void xorencryptdecrypt(char *message, char *key);
+//void xorencryptdecrypt(char *message, char *key);
+static void xorencryptdecrypt(char *input, char *output, int messageLen, char *key);
 
 static int getFileFromDFSServers(char *fileName, char *subfolderName);
 static int getFileInfoFromDFSServers(char *dfsName, dfsFilePairMembers *dfsMembers, char *fileName, char *headerMsg);

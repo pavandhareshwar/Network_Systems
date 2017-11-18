@@ -91,8 +91,8 @@ int main(int argc, char *argv[])
         
         if (childPid == 0)
         {
-            printf("Created a child process for a new accepted connection "
-                   "PID: %d\n", getpid());
+            PRINT_DEBUG_MESSAGE("Created a child process for a new accepted connection "
+                                "PID: %d\n", getpid());
             
             close(dfsServerSockDesc);
             
@@ -103,7 +103,7 @@ int main(int argc, char *argv[])
             }
             
             /* Close the client socket */
-            printf("Closing client socket: %d\n", dfsclientSockDesc);
+            PRINT_DEBUG_MESSAGE("Closing client socket: %d\n", dfsclientSockDesc);
             close(dfsclientSockDesc);
             
             /* Kill the child process */
@@ -297,7 +297,7 @@ int handleRequest(int clientSock, char *fileDataBuffer)
     
     if (bytes_read > 0)
     {
-        printf("File Data Buffer content: %s\n", fileDataBuffer);
+        PRINT_DEBUG_MESSAGE("File Data Buffer content: %s\n", fileDataBuffer);
         
         extractReqParams(fileDataBuffer, userName, password, command);
         
@@ -310,7 +310,7 @@ int handleRequest(int clientSock, char *fileDataBuffer)
         char responseMsg[50];
         if (found == true)
         {
-            printf("Match found\n");
+            printf("Authentication successful\n");
             
             sprintf(responseMsg, "Valid Username/Password");
             
@@ -318,7 +318,6 @@ int handleRequest(int clientSock, char *fileDataBuffer)
             
             if (strcmp(command, "LIST") == 0)
             {
-                printf("LIST funciton called\n");
                 int listReqRetVal = handleListRequest(clientSock, fileDataBuffer);
                 if (listReqRetVal != 0)
                 {
@@ -327,7 +326,6 @@ int handleRequest(int clientSock, char *fileDataBuffer)
             }
             else if (strcmp(command, "GET") == 0)
             {
-                printf("GET funciton called\n");
                 int getReqRetVal = handleGetRequest(clientSock, fileDataBuffer);
                 if (getReqRetVal != 0)
                 {
@@ -336,7 +334,6 @@ int handleRequest(int clientSock, char *fileDataBuffer)
             }
             else if (strcmp(command, "PUT") == 0)
             {
-                printf("PUT funciton called\n");
                 int putReqRetVal = handlePutRequest(clientSock, fileDataBuffer);
                 if (putReqRetVal != 0)
                 {
@@ -345,7 +342,6 @@ int handleRequest(int clientSock, char *fileDataBuffer)
             }
             else if (strcmp(command, "MKDIR") == 0)
             {
-                printf("MKDIR funciton called\n");
                 int mkDirReqRetVal = handleMkdirRequest(clientSock, fileDataBuffer);
                 if (mkDirReqRetVal != 0)
                 {
@@ -360,7 +356,7 @@ int handleRequest(int clientSock, char *fileDataBuffer)
         }
         else
         {
-            printf("Match not found\n");
+            printf("Authentication failed\n");
             sprintf(responseMsg, "Invalid Username/Password. Please try again");
             
             write(clientSock, responseMsg, strlen(responseMsg));
@@ -737,7 +733,7 @@ int handleGetRequest(int clientSock, char *fileDataBuffer)
         sprintf(responseMsg, "file1:%s file2:%s fileMember1:%d fileMember2:%d filePart1Size:%d filePart2Size:%d",
                 file1Name, file2Name, fileMember1, fileMember2, filePart1Size, filePart2Size);
         
-        printf("responseMsg::%s\n", responseMsg);
+        PRINT_DEBUG_MESSAGE("responseMsg::%s\n", responseMsg);
         
         write(clientSock, responseMsg, strlen(responseMsg));
         
@@ -747,7 +743,7 @@ int handleGetRequest(int clientSock, char *fileDataBuffer)
         
         if (*reqBuffer != '\0')
         {
-            printf("Request Buffer: %s\n", reqBuffer);
+            PRINT_DEBUG_MESSAGE("Request Buffer: %s\n", reqBuffer);
         
             char filePart1Name[50];
             memset(filePart1Name, '\0', sizeof(filePart1Name));
@@ -781,7 +777,7 @@ int handleGetRequest(int clientSock, char *fileDataBuffer)
         
         if (*reqBuffer != '\0')
         {
-            printf("Request Buffer: %s\n", reqBuffer);
+            PRINT_DEBUG_MESSAGE("Request Buffer: %s\n", reqBuffer);
         
             char filePart2Name[50];
             memset(filePart2Name, '\0', sizeof(filePart2Name));

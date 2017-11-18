@@ -12,7 +12,7 @@
 
 #define min(a,b)                    ((a) < (b) ? (a) : (b))
 
-#define PRINT_DEBUG_MESSAGES        (1)
+//#define PRINT_DEBUG_MESSAGES        (1)
 
 #ifdef PRINT_DEBUG_MESSAGES
 #define PRINT_DEBUG_MESSAGE(...) do{ fprintf( stderr, __VA_ARGS__ ); } while( false )
