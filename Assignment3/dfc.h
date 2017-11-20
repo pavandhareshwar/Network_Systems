@@ -6,12 +6,13 @@
     ----------------------------------------------------------------
  */
 
-#define min(a,b)                    ((a) < (b) ? (a) : (b))
-#define MAX_USER_FOLDERS            (10)
-#define MAX_FILE_COUNT              (50)
-#define ENCRYPTION                  (1)
+#define min(a,b)                        ((a) < (b) ? (a) : (b))
+#define MAX_USER_FOLDERS                (10)
+#define MAX_FILE_COUNT                  (50)
+#define MAX_DFS_SERVER_FILELIST_SIZE    (512)
+#define ENCRYPTION                      (1)
 
-//#define PRINT_DEBUG_MESSAGES        (1)
+//#define PRINT_DEBUG_MESSAGES          (1)
 
 #ifdef PRINT_DEBUG_MESSAGES
 #define PRINT_DEBUG_MESSAGE(...) do{ fprintf( stderr, __VA_ARGS__ ); } while( false )
@@ -107,7 +108,7 @@ static int sendFilesToDFSServers(char *fileName, char *subfolderName);
 
 static int sendFileDataToDFSServer(char *dfsName, dfsFilePairMembers dfsMembers, char *fileName, char *headerMsg);
 static int calculateMD5Hash(char *filename, int *xVal);
-static uint32_t hex2int(char *hex);
+static int32_t hex2int(char *hex);
 //static void decideFilePairs(int xVal, dfsFilePairMembers *df1Members, dfsFilePairMembers *df2Members,
 //                            dfsFilePairMembers *df3Members, dfsFilePairMembers *df4Members);
 static void decideFilePairs(int xVal, dfsFilePairMembers *dfs1Members, dfsFilePairMembers *dfs2Members,

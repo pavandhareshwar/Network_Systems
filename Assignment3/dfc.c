@@ -67,7 +67,7 @@ int main(int argc, char *argv[])
         
         PRINT_DEBUG_MESSAGE("userInput: %s\n", userInput);
         
-        char commandName[10];
+        char commandName[20];
         char fileName[100];
         char subfolder[100];
         
@@ -651,9 +651,9 @@ int calculateMD5Hash(char *filename, int *xVal)
     return retVal;
 }
 
-uint32_t hex2int(char *hex)
+int32_t hex2int(char *hex)
 {
-    uint32_t val = 0;
+    int32_t val = 0;
     while (*hex)
     {
         /* get current character then increment */
@@ -1801,28 +1801,28 @@ void findFilesFromDFSServerFileList(char *fileListDFSServer1, char *fileListDFSS
     }
     
     /* DFS Server 1 */
-    char dfsServer1FileList[512];
+    char dfsServer1FileList[MAX_DFS_SERVER_FILELIST_SIZE];
     memset(dfsServer1FileList, '\0', sizeof(dfsServer1FileList));
     
     findFilesFromIndividualDFSServerFileList(fileListDFSServer1, dfsServer1FileList);
     PRINT_DEBUG_MESSAGE("DFS Server 1 FileList: {%s}\n", dfsServer1FileList);
     
     /* DFS Server 2 */
-    char dfsServer2FileList[512];
+    char dfsServer2FileList[MAX_DFS_SERVER_FILELIST_SIZE];
     memset(dfsServer2FileList, '\0', sizeof(dfsServer2FileList));
     
     findFilesFromIndividualDFSServerFileList(fileListDFSServer2, dfsServer2FileList);
     PRINT_DEBUG_MESSAGE("DFS Server 2 FileList: {%s}\n", dfsServer2FileList);
     
     /* DFS Server 3 */
-    char dfsServer3FileList[512];
+    char dfsServer3FileList[MAX_DFS_SERVER_FILELIST_SIZE];
     memset(dfsServer3FileList, '\0', sizeof(dfsServer3FileList));
     
     findFilesFromIndividualDFSServerFileList(fileListDFSServer3, dfsServer3FileList);
     PRINT_DEBUG_MESSAGE("DFS Server 3 FileList: {%s}\n", dfsServer3FileList);
     
     /* DFS Server 4 */
-    char dfsServer4FileList[512];
+    char dfsServer4FileList[MAX_DFS_SERVER_FILELIST_SIZE];
     memset(dfsServer4FileList, '\0', sizeof(dfsServer4FileList));
     
     findFilesFromIndividualDFSServerFileList(fileListDFSServer4, dfsServer4FileList);
@@ -1838,6 +1838,7 @@ void findFilesFromDFSServerFileList(char *fileListDFSServer1, char *fileListDFSS
     
     for (int i = 0; i < dfsServerFileListUserCount; i++)
     {
+        printf("Userfilelist: %s\n", xDfsServerFileList.userFileList[i]);
         int fileCountPerUser = 0;
         int length = (int)strlen(xDfsServerFileList.userFileList[i]);
         if (xDfsServerFileList.userFileList[i][length-1] == ',')
@@ -1965,7 +1966,7 @@ void filldfsServerFileListInClient(char *dfsServerFileList)
                     {
                         matchFound = true;
                         matchedUserFolderIndex = i;
-                        //printf("Match found\n");
+                        PRINT_DEBUG_MESSAGE("Match found %s\n", token3);
                         break;
                     }
                 }
@@ -1978,15 +1979,19 @@ void filldfsServerFileListInClient(char *dfsServerFileList)
                 
                 if (matchFound == false)
                 {
-                    PRINT_DEBUG_MESSAGE("No match found\n");
+                    PRINT_DEBUG_MESSAGE("No match found. Adding %s to folderlist\n", tokenCopy);
+                    if (dfsServerFileListUserCount == 0)
+                    {
+                        dfsServerFileListUserCount = 1;
+                    }
                     strcpy(xDfsServerFileList.userFolder[dfsServerFileListUserCount], tokenCopy);
-                    
-                    dfsServerFileListUserCount++;
                 
                     char fileListEntry[50];
                     memset(fileListEntry, '\0', sizeof(fileListEntry));
                     sprintf(fileListEntry, "%s%s", token3, ",");
                     strcat(xDfsServerFileList.userFileList[dfsServerFileListUserCount], fileListEntry);
+                    
+                    dfsServerFileListUserCount++;
                 }
                 else
                 {
