@@ -12,12 +12,19 @@
 #define LISTEN_SYSCALL_BACKLOG          (10)     /* Max length of pending connections queued up by the kernel */
 #define HTTP_REQ_MSG_MAX_LEN            (1024)  /* Max length of an HTTP request message */
 //#define PRINT_DEBUG_MESSAGES            (1)
+//#define USE_TEMP_DIRECTORY              (1)
 #define TRANSFER_SIZE                   (1024)
 
 #define HTTP_RSP_SP                     " "
 #define HTTP_RSP_CRLF                   "\r\n"
 #define HTTP_RSP_LFLF                   "\n\n"
 #define HTTP_RSP_LF                     "\n"
+
+#define MAX_HOST_NAMES                  (20)
+#define MAX_HOST_NAME_LENGTH            (100)
+#define IP_ADDR_LIST_MAX_LEN            (1024)
+
+#define SHM_SIZE                        (20*100*1024)  /* make it a 1K shared memory segment */
 
 #define min(a,b)                        (((a) < (b)) ? (a) : (b))
 
@@ -26,7 +33,6 @@
 #else
 #define PRINT_DEBUG_MESSAGE(...) do{ } while ( false )
 #endif
-
 
 typedef struct _http_req_msg_params_
 {
@@ -40,6 +46,26 @@ typedef struct _proxy_http_req_msg_params_
     http_req_msg_params clientHttpReqMsgParams;
     char                hostName[100];
 }proxy_http_req_msg_params;
+
+typedef struct _hostNameToIpAddr_
+{
+    char    hostNameList[MAX_HOST_NAMES][MAX_HOST_NAME_LENGTH];
+    char    ipAddrList[MAX_HOST_NAMES][IP_ADDR_LIST_MAX_LEN];
+    int     hostIndex;
+}hostNameToIpAddr;
+
+hostNameToIpAddr proxyHostNameToIpAddrStruct;
+
+char *timeoutFifo = "/tmp/timeoutFifo";
+
+bool intSignalReceived;
+/*  Server socket */
+int proxySock;
+
+/* Client socket */
+int clientSock;
+
+char restOfHttpReqMsg[2048];
 
 /* HTTP reponse and header */
 
@@ -87,6 +113,16 @@ static char* internalServerErrorResponseBody =
 " </head>\n"
 "</html>\n";
 
+/* HTTP response body indicating forbidden request */
+
+static char* forbiddenRequestResponseBody =
+"\n"
+"<html>\n"
+" <body>\n"
+"  <h1>Error 403 Forbidden</h1>\n"
+" </body>\n"
+"</html>\n";
+
 
 /* Function prototypes */
 static int handleConnRequest(int connId, char *httpReqMsgBuffer);
@@ -100,11 +136,22 @@ static void sendBadRequestResponse(int connId, http_req_msg_params *clientHttpRe
 static void sendNotImplementedResponse(int connId, http_req_msg_params *clientHttpReqMsgParams);
 static void sendInternalServerErrorResponse(int connId);
 static void sendFileNotFoundResponse(int connId, http_req_msg_params clientHttpReqMsgParams);
+static void sendForbiddenResponse(int connId, http_req_msg_params clientHttpReqMsgParams);
 static void composeHttpReqMsg(proxy_http_req_msg_params proxyHttpReqMsgParams, char *proxyReqToServer);
-static int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParams, char *hostName);
+static int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParams,
+                                  char *hostName, bool sendToClient);
 static void checkIfCachedCopyExists(char *reqUrl, char *hostName, int *cachedCopyExists);
 static void checkIfDirAndFileExists(char *folderName, char *fileName, bool *found);
 static void checkIfDirectoryExists(char *dirName);
 static int sendCachedCopyToClient(int connId, http_req_msg_params clientHttpReqMsgParams, char *hostName);
+static void createChildProcessForTimeOutCheck(void);
+static int createSharedMemory(void);
+static void signalForChildHandler(int sig);
+static void signalHandler(int sig);
+static int checkIfHostIsBlocked(char *hostName);
+static void parseIndexFileForLinks(int connId, char *filePath);
+static void writeHostNameToIpAddrToLocalFile(char *hostName, char *ipAddress);
+static void checkIpForHostNameInLocalFile(char *hostName, char *ipAddr);
+static void testIpAddress(char *ipAddrToTest, bool *ipAddrWorks);
 
 #endif /* webproxy_h */
