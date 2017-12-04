@@ -28,6 +28,9 @@
 
 #define min(a,b)                        (((a) < (b)) ? (a) : (b))
 
+
+#define LOCAL_DNS_CACHE_FILE            "hostNameToIpAddrCache.txt"
+
 #ifdef PRINT_DEBUG_MESSAGES
 #define PRINT_DEBUG_MESSAGE(...) do{ fprintf( stderr, __VA_ARGS__ ); } while( false )
 #else
@@ -133,9 +136,11 @@ static void extractAndValidateHostName(char *httpReqMsgBuffer, bool *validHostNa
 
 static int handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgParams, char *hostName);
 static void sendBadRequestResponse(int connId, http_req_msg_params *clientHttpReqMsgParams);
+#if 0
 static void sendNotImplementedResponse(int connId, http_req_msg_params *clientHttpReqMsgParams);
 static void sendInternalServerErrorResponse(int connId);
 static void sendFileNotFoundResponse(int connId, http_req_msg_params clientHttpReqMsgParams);
+#endif
 static void sendForbiddenResponse(int connId, http_req_msg_params clientHttpReqMsgParams);
 static void composeHttpReqMsg(proxy_http_req_msg_params proxyHttpReqMsgParams, char *proxyReqToServer);
 static int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParams,
@@ -144,7 +149,7 @@ static void checkIfCachedCopyExists(char *reqUrl, char *hostName, int *cachedCop
 static void checkIfDirAndFileExists(char *folderName, char *fileName, bool *found);
 static void checkIfDirectoryExists(char *dirName);
 static int sendCachedCopyToClient(int connId, http_req_msg_params clientHttpReqMsgParams, char *hostName);
-static void createChildProcessForTimeOutCheck(void);
+static void createProcessToHandleCacheExpiration(void);
 static int createSharedMemory(void);
 static void signalForChildHandler(int sig);
 static void signalHandler(int sig);
@@ -153,5 +158,7 @@ static void parseIndexFileForLinks(int connId, char *filePath);
 static void writeHostNameToIpAddrToLocalFile(char *hostName, char *ipAddress);
 static void checkIpForHostNameInLocalFile(char *hostName, char *ipAddr);
 static void testIpAddress(char *ipAddrToTest, bool *ipAddrWorks);
+static int remove_directory(const char *path);
+static void createProcessForPrefetching(int connId, char *fullFilePath);
 
 #endif /* webproxy_h */

@@ -21,6 +21,7 @@
 #include <sys/shm.h>
 #include <netdb.h>
 #include <dirent.h>
+#include <time.h>
 
 #include "webproxy.h"
 
@@ -42,14 +43,13 @@ int main(int argc, const char * argv[])
     
     int proxyPortNum = atoi(argv[1]);
     //int timeout = atoi(argv[2]);
-    //int fifoFileDesc = -1;
     
     memset(restOfHttpReqMsg, '\0', sizeof(restOfHttpReqMsg));
     
     /* Create a file to act as a hostname to IP address cache */
     FILE *fpLocalFileForHostNameToIpAddr = NULL;
     
-    fpLocalFileForHostNameToIpAddr = fopen("hostNameToIpAddrCache.txt", "r");
+    fpLocalFileForHostNameToIpAddr = fopen(LOCAL_DNS_CACHE_FILE, "r");
     if (fpLocalFileForHostNameToIpAddr)
     {
         /* File already exists. Not doing anything */
@@ -58,14 +58,14 @@ int main(int argc, const char * argv[])
     else
     {
         /* File doesn't exist. Creating one */
-        int fdescLocalFileForHostNameToIpAddr = open("hostNameToIpAddrCache.txt", O_CREAT | O_EXCL, S_IRWXU | S_IRWXG | S_IRWXO);
+        int fdescLocalFileForHostNameToIpAddr = open(LOCAL_DNS_CACHE_FILE, O_CREAT | O_EXCL, S_IRWXU | S_IRWXG | S_IRWXO);
         if (fdescLocalFileForHostNameToIpAddr)
         {
-            printf("File %s created successfully\n", "hostNameToIpAddrCache.txt");
+            printf("File %s created successfully\n", LOCAL_DNS_CACHE_FILE);
         }
         else
         {
-            printf("File %s couldn't be created. Error : %s", "hostNameToIpAddrCache.txt", strerror(errno));
+            printf("File %s couldn't be created. Error : %s", LOCAL_DNS_CACHE_FILE, strerror(errno));
         }
         
         close(fdescLocalFileForHostNameToIpAddr);
@@ -109,7 +109,8 @@ int main(int argc, const char * argv[])
     }
     
     /*  Bind (Associate the server socket created with the port number and the
-     IP address */
+        IP address
+     */
     if (bind(proxySock, /* socket descriptor */
              (struct sockaddr *)&proxySockAddr, /* socket address structure */
              sizeof(proxySockAddr) /* addrlen */) < 0)
@@ -132,7 +133,7 @@ int main(int argc, const char * argv[])
     
     printf("Waiting for incoming connections...\n");
     
-    //createChildProcessForTimeOutCheck();
+    //createProcessToHandleCacheExpiration();
     
     while (1)
     {
@@ -165,6 +166,10 @@ int main(int argc, const char * argv[])
         {
             PRINT_DEBUG_MESSAGE("Created a child process for a new accepted connection, "
                    "PID: %d\n", getpid());
+            
+            //printf("Created a child process for a new accepted connection, "
+            //                    "PID: %d\n", getpid());
+            
             /* Child process */
             /* Close the parent socket in the child process because we want
              the child process to handle the connection request and not
@@ -183,26 +188,12 @@ int main(int argc, const char * argv[])
                 printf("Handle Connection Request Failed\n");
             }
             
-#if 0
-            fifoFileDesc = open(timeoutFifo, O_WRONLY);
-            if (fifoFileDesc < 0)
-            {
-                printf("Timeout fifo open failed\n");
-            }
-            
-            char sendBuffer[100];
-            memset(sendBuffer, '\0', sizeof(sendBuffer));
-            
-            strcpy(sendBuffer, "timeout");
-            
-            write(fifoFileDesc, sendBuffer, strlen(sendBuffer));
-#endif
-            
             /* Close the client socket */
             PRINT_DEBUG_MESSAGE("Closing client socket: %d\n", clientSock);
             close(clientSock);
             
             /* Kill the child process */
+            //printf("Killing process with pid: %d\n", getpid());
             exit(0);
         }
         else if (child_pid > 0)
@@ -215,7 +206,7 @@ int main(int argc, const char * argv[])
         }
         else
         {
-            printf("fork failed, %s\n", strerror(errno));
+            printf("%s:%d:: fork failed, %s\n", __FUNCTION__,  __LINE__, strerror(errno));
         }
     }
     
@@ -240,7 +231,7 @@ int createSharedMemory(void)
     hostNameToIpAddr    *sharedMemoryDataPtr = malloc(20*100*1024*sizeof(char));
     if (sharedMemoryDataPtr == NULL)
     {
-        printf("Malloc Failed\n");
+        printf("%s:%d:: Malloc Failed\n", __FUNCTION__,  __LINE__);
         return -1;
     }
     
@@ -254,7 +245,7 @@ int createSharedMemory(void)
     /*  Request for shared memory */
     if ((sharedMemoryId = shmget(sharedMemoryKey, SHM_SIZE, 0644 | IPC_CREAT)) == -1)
     {
-        perror("shmget");
+        printf("%s:%d:: shmget failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
         return -1;
     }
     
@@ -262,7 +253,7 @@ int createSharedMemory(void)
     sharedMemoryDataPtr = shmat(sharedMemoryId, (void *)0, 0);
     if (sharedMemoryDataPtr == (hostNameToIpAddr *)(-1))
     {
-        perror("shmat");
+        printf("%s:%d:: shmat failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
         return -1;
     }
     
@@ -275,7 +266,7 @@ int createSharedMemory(void)
     /*  Detach the memory segment */
     if (shmdt(sharedMemoryDataPtr) == -1)
     {
-        perror("shmdt");
+        printf("%s:%d:: shmdt failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
         return -1;
     }
     
@@ -305,14 +296,14 @@ void signalHandler(int sig)
         /*  Create a memory key */
         if ((sharedMemoryKey = ftok("webproxy.c", 'R')) == -1)
         {
-            perror("ftok");
+            printf("%s:%d:: ftok failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
             return;
         }
         
         /*  Request for shared memory */
         if ((sharedMemoryId = shmget(sharedMemoryKey, SHM_SIZE, 0644 | IPC_CREAT)) == -1)
         {
-            perror("shmget");
+            printf("%s:%d:: shmget failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
             return;
         }
         
@@ -323,7 +314,7 @@ void signalHandler(int sig)
         }
         else
         {
-            perror("shmctl");
+            printf("%s:%d:: shmctl failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
             return;
         }
         
@@ -333,7 +324,7 @@ void signalHandler(int sig)
     }
 }
 
-void createChildProcessForTimeOutCheck(void)
+void createProcessToHandleCacheExpiration(void)
 {
     pid_t childPid;
     
@@ -341,62 +332,162 @@ void createChildProcessForTimeOutCheck(void)
     
     if (childPid == 0)
     {
-        /* Child Process */
-        int fifoFileDesc = -1;
-        char receiveBuffer[100];
+        /*  Child Process */
+        /*  We check the last modified time of the file and if exceeds the
+            timeout value specified, then we delete the file.
+         */
         
-        while (1)
+        char *filePath = "./www.dspguide.com";
+        
+        DIR *dir = opendir(filePath);
+        if (dir)
         {
-            fifoFileDesc = open(timeoutFifo, O_RDONLY);
-            if (fifoFileDesc < 0)
+            closedir(dir);
+        }
+        else
+        {
+            printf("Directory %s doesn't exist\n", filePath);
+            //return;
+        }
+        
+        while(1)
+        {
+            struct stat attrib;
+            stat(filePath, &attrib);
+            char createTime[20];
+            char lastAccessTime[20];
+            char lastModifiedTime[20];
+            char currentTime[20];
+            
+            struct timeval curTime;
+            
+            memset(createTime, '\0', sizeof(createTime));
+            memset(lastAccessTime, '\0', sizeof(lastAccessTime));
+            memset(lastModifiedTime, '\0', sizeof(lastModifiedTime));
+            memset(currentTime, '\0', sizeof(currentTime));
+            
+            struct tm t1, t2, t3, t4;
+            
+            tzset();
+            if (localtime_r(&(attrib.st_ctimespec.tv_sec), &t1))
             {
-                printf("Timeout fifo open failed\n");
+                strftime(createTime, 20, "%F %T", &t1);
             }
             
-            memset(receiveBuffer, '\0', sizeof(receiveBuffer));
-            
-            read(fifoFileDesc, receiveBuffer, sizeof(receiveBuffer));
-            
-            if (strcmp(receiveBuffer, "timeout") == 0)
+            if (localtime_r(&(attrib.st_atimespec.tv_sec), &t2))
             {
-                char command[100];
-                sprintf(command, "find %s -mmin %s%d -exec rm -rf {} \\;", "tempDir/*", "+", 1);
-                printf("Command: %s\n", command);
+                strftime(lastAccessTime, 20, "%F %T", &t2);
+            }
+            
+            if (localtime_r(&(attrib.st_mtimespec.tv_sec), &t3))
+            {
+                strftime(lastModifiedTime, 20, "%F %T", &t3);
+            }
+            
+            //printf("==========================================\n");
+            //printf("File %s stats:\n", filePath);
+            //printf("Created Time: %s\n", createTime);
+            //printf("Last Access Time: %s\n", lastAccessTime);
+            //printf("Last Modified Time: %s\n", lastModifiedTime);
+            //printf("==========================================\n");
+            
+            gettimeofday(&curTime, NULL);
+            
+            if (localtime_r(&(curTime.tv_sec), &t4))
+            {
+                strftime(currentTime, 20, "%F %T", &t4);
+            }
+            
+            //printf("Current Time: %s\n", currentTime);
+            
+            if ((curTime.tv_sec - attrib.st_atimespec.tv_sec) > 300)
+            {
+                printf("==========================================\n");
+                printf("File %s stats:\n", filePath);
+                printf("Created Time: %s\n", createTime);
+                printf("Last Access Time: %s\n", lastAccessTime);
+                printf("Last Modified Time: %s\n", lastModifiedTime);
+                printf("==========================================\n");
                 
-                int systemCmdVal = system(command);
-                if (systemCmdVal != 0)
-                {
-                    printf("System commmand failed\n");
-                }
-                else
-                {
-                    printf("System command success\n");
-                }
-            }
-            else
-            {
-                /* Do nothing */
+                printf("Its been %ld secs since last time %s was accessed. Deleting the folder corressponding to the file.\n",
+                       (curTime.tv_sec - attrib.st_atimespec.tv_sec), filePath);
+                
+                remove_directory(filePath);
             }
         }
+        
     }
     else if (childPid > 0)
     {
         /*  Parent process */
-        /*  Create a FIFO here for the parent and child process
-            to communicate with each other
-         */
-        
-        /* Creating a fifo with mode as 666 */
-        if (mkfifo(timeoutFifo, (((S_IRUSR) | (S_IWUSR)) | ((S_IRGRP) | (S_IWGRP)) | ((S_IROTH) | (S_IWOTH)))) != 0)
-        {
-            perror("mkfifo failed\n");
-        }
-        else
-        {
-            printf("Fifo created successfully\n");
-        }
         return;
     }
+}
+
+int remove_directory(const char *path)
+{
+    DIR *d = opendir(path);
+    size_t path_len = strlen(path);
+    int r = -1;
+    
+    if (d)
+    {
+        struct dirent *p;
+        
+        r = 0;
+        
+        while (!r && (p = readdir(d)))
+        {
+            int r2 = -1;
+            char *buf;
+            size_t len;
+            
+            /* Skip the names "." and ".." as we don't want to recurse on them. */
+            if (!strcmp(p->d_name, ".") || !strcmp(p->d_name, ".."))
+            {
+                continue;
+            }
+            
+            len = path_len + strlen(p->d_name) + 2; // +1 for / and another +1 for \0
+            buf = malloc(len);
+            
+            if (buf)
+            {
+                struct stat statbuf;
+                
+                snprintf(buf, len, "%s/%s", path, p->d_name);
+                
+                if (!stat(buf, &statbuf))
+                {
+                    if (S_ISDIR(statbuf.st_mode))
+                    {
+                        r2 = remove_directory(buf);
+                        printf("remove_directory %s\n", buf);
+                    }
+                    else
+                    {
+                        //r2 = unlink(buf);
+                        printf("unlinking directory %s\n", buf);
+                        r2 = 0;
+                    }
+                }
+                
+                free(buf);
+            }
+            
+            r = r2;
+        }
+        
+        closedir(d);
+    }
+    
+    if (!r)
+    {
+        printf("rmdir %s\n", path);
+        //r = rmdir(path);
+    }
+    
+    return r;
 }
 
 int handleConnRequest(int connId, char *httpReqMsgBuffer)
@@ -660,7 +751,7 @@ void resolveHostNameToIpAddr(char *hostName, bool *validHostName)
     if ((hostEnt = gethostbyname(hostName)) == NULL)
     {
         // get the host info
-        perror("gethostbyname");
+        printf("%s:%d:: gethostbyname failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
         if (errno == HOST_NOT_FOUND)
         {
             printf("Host not found\n");
@@ -692,14 +783,14 @@ void resolveHostNameToIpAddr(char *hostName, bool *validHostName)
         /* make the key: */
         if ((sharedMemoryKey = ftok("webproxy.c", 'R')) == -1)
         {
-            perror("ftok");
+            printf("%s:%d:: ftok failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
             return;
         }
         
         /* connect to (and possibly create) the segment: */
         if ((sharedMemoryId = shmget(sharedMemoryKey, SHM_SIZE, 0644)) == -1)
         {
-            perror("shmget");
+            printf("%s:%d:: shmget failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
             return;
         }
         
@@ -707,7 +798,7 @@ void resolveHostNameToIpAddr(char *hostName, bool *validHostName)
         sharedMemoryDataPtr = shmat(sharedMemoryId, (void *)0, 0);
         if (sharedMemoryDataPtr == (hostNameToIpAddr *)(-1))
         {
-            perror("shmat");
+            printf("%s:%d:: shmat failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
             return;
         }
         
@@ -770,7 +861,7 @@ void resolveHostNameToIpAddr(char *hostName, bool *validHostName)
         /*  Detach the memory segment */
         if (shmdt(sharedMemoryDataPtr) == -1)
         {
-            perror("shmdt");
+            printf("%s:%d:: shmdt failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
             return;
         }
     }
@@ -789,7 +880,7 @@ void writeHostNameToIpAddrToLocalFile(char *hostName, char *ipAddress)
     
     buffer = (char *)malloc(numBytes*sizeof(char));
     
-    FILE *fp = fopen("hostNameToIpAddrCache.txt", "r");
+    FILE *fp = fopen(LOCAL_DNS_CACHE_FILE, "r");
     if (fp)
     {
         while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
@@ -809,7 +900,7 @@ void writeHostNameToIpAddrToLocalFile(char *hostName, char *ipAddress)
         
     if (entryExists == false)
     {
-        fp = fopen("hostNameToIpAddrCache.txt", "a");
+        fp = fopen(LOCAL_DNS_CACHE_FILE, "a");
         if (fp)
         {
             PRINT_DEBUG_MESSAGE("Entry doesn't exist\n");
@@ -853,7 +944,7 @@ int handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgParams, cha
         }
         else
         {
-            printf("Cached copy exists. Sending cached copy\n");
+            printf("Cached copy exists for %s. Sending cached copy\n", clientHttpReqMsgParams.httpReqUri);
             sendCachedCopyToClient(connId, clientHttpReqMsgParams, hostName);
         }
         
@@ -883,7 +974,8 @@ int handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgParams, cha
         }
 #endif
         
-        parseIndexFileForLinks(connId, fullFilePath);
+        //parseIndexFileForLinks(connId, fullFilePath);
+        //createProcessForPrefetching(connId, fullFilePath);
     }
     
     return 0;
@@ -899,26 +991,33 @@ int checkIfHostIsBlocked(char *hostName)
     
     buffer = (char *)malloc(numBytes*sizeof(char));
     
-    FILE *fp = fopen("websites_deny.txt", "r");
-    if (fp)
+    if (buffer)
     {
-        while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
+        FILE *fp = fopen("websites_deny.txt", "r");
+        if (fp)
         {
-            int len = (int)strlen(buffer);
-            buffer[len-1] = '\0';
-            
-            if(strcmp(buffer, hostName) == 0)
+            while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
             {
-                PRINT_DEBUG_MESSAGE("Hostname %s in website deny list\n", hostName);
-                blockHost = true;
-                break;
+                int len = (int)strlen(buffer);
+                buffer[len-1] = '\0';
+                
+                if(strcmp(buffer, hostName) == 0)
+                {
+                    PRINT_DEBUG_MESSAGE("Hostname %s in website deny list\n", hostName);
+                    blockHost = true;
+                    break;
+                }
             }
+            PRINT_DEBUG_MESSAGE("Hostname %s not in websites denied list\n", hostName);
+            fclose(fp);
         }
-        PRINT_DEBUG_MESSAGE("Hostname %s not in websites denied list\n", hostName);
-        fclose(fp);
+        
+        free(buffer);
     }
-    
-    free(buffer);
+    else
+    {
+        printf("%s:%d:: malloc failed: %s", __FUNCTION__,  __LINE__, strerror(errno));
+    }
     
     if (blockHost == false)
     {
@@ -1221,7 +1320,6 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
     }
     
     char ipAddr[100];
-    int ipAddrLen = -1;
     
     memset(ipAddr, '\0', sizeof(ipAddr));
     checkIpForHostNameInLocalFile(hostName, ipAddr);
@@ -1241,6 +1339,7 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
         to the client as part of the response message.
      */
     
+    //printf("Requesting %s\n", fullFilePath);
     char proxyReqToServer[2048];
     memset(proxyReqToServer, '\0', sizeof(proxyReqToServer));
     
@@ -1251,7 +1350,8 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
     serverAddr.sin_family = AF_INET;
     inet_pton(AF_INET, ipAddr, &serverAddr.sin_addr);
     
-    int tcpSocket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+    //int tcpSocket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+    int tcpSocket = socket(PF_INET, SOCK_STREAM, 0);
     
     if (tcpSocket < 0)
         printf("Error opening socket\n");
@@ -1265,9 +1365,8 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
     char receiveBuffer[1024];
     memset(receiveBuffer, '\0', sizeof(receiveBuffer));
     
-    printf("Saving contents to file %s\n", fullFilePath);
     ssize_t recvdBytes = -1;
-    while ((recvdBytes = recv(tcpSocket, receiveBuffer, sizeof(receiveBuffer) - 1 , 0)) != 0)
+    while ((recvdBytes = recv(tcpSocket, receiveBuffer, sizeof(receiveBuffer) , 0)) != 0)
     {
         fwrite(receiveBuffer, sizeof(char), recvdBytes, fpWtr);
         if (true == sendToClient)
@@ -1275,7 +1374,9 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
             write(connId, receiveBuffer, recvdBytes);
         }
         memset(receiveBuffer, '\0', sizeof(receiveBuffer));
+        recvdBytes = -1;
     }
+    printf("Saved contents to file %s\n", fullFilePath);
     
     fclose(fpWtr);
     
@@ -1300,10 +1401,10 @@ void checkIpForHostNameInLocalFile(char *hostName, char *ipAddr)
     
     memset(ipAddressList, '\0', sizeof(ipAddressList));
     
-    fp = fopen("hostNameToIpAddrCache.txt", "r");
+    fp = fopen(LOCAL_DNS_CACHE_FILE, "r");
     if (!fp)
     {
-        printf("file %s open failed\n", "hostNameToIpAddrCache.txt");
+        printf("file %s open failed\n", LOCAL_DNS_CACHE_FILE);
         performDNSquery = true;
     }
     else
@@ -1363,6 +1464,7 @@ void checkIpForHostNameInLocalFile(char *hostName, char *ipAddr)
     
     if (performDNSquery == true)
     {
+        printf("No entry exists for hostname %s in %s. Performing DNS lookup.\n", hostName, LOCAL_DNS_CACHE_FILE);
         if((hp = gethostbyname(hostName)) == NULL)
         {
             herror("gethostbyname");
@@ -1428,6 +1530,35 @@ void composeHttpReqMsg(proxy_http_req_msg_params proxyHttpReqMsgParams, char *pr
     return;
 }
 
+void createProcessForPrefetching(int connId, char *fullFilePath)
+{
+    pid_t childPid;
+    
+    childPid = fork();
+    if (childPid == 0)
+    {
+        /* Child process */
+        /*  The child process created here will be used to handle
+            pre-fetching
+         */
+        parseIndexFileForLinks(connId, fullFilePath);
+        
+        exit(0);
+    }
+    else if (childPid > 0)
+    {
+        /* Parent process */
+        /* Do nothing */
+        return;
+    }
+    else
+    {
+        printf("%s:%d:: fork failed: %s\n", __FUNCTION__, __LINE__, strerror(errno));
+    }
+    
+    return;
+}
+
 void parseIndexFileForLinks(int connId, char *filePath)
 {
     FILE    *fp = NULL;
@@ -1457,80 +1588,87 @@ void parseIndexFileForLinks(int connId, char *filePath)
     
     buffer = (char *)malloc(numBytes*sizeof(char));
     
-    if (strstr(filePath, ".htm") || strstr(filePath, ".html"))
+    if (buffer)
     {
-        printf("Opening file %s\n", filePath);
-        fp = fopen(filePath, "r");
-        if (fp)
+        if (strstr(filePath, ".htm") || strstr(filePath, ".html"))
         {
-            while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
+            //printf("Opening file %s\n", filePath);
+            fp = fopen(filePath, "r");
+            if (fp)
             {
-                int len = (int)strlen(buffer);
-                buffer[len-1] = '\0';
-                
-                char *subStrPtr = strstr(buffer, hrefStr);
-                if (subStrPtr)
+                while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
                 {
-                    int length = (int)strlen(subStrPtr);
-                    char subStrCopy[length+1];
-                    memset(subStrCopy, '\0', sizeof(subStrCopy));
+                    int len = (int)strlen(buffer);
+                    buffer[len-1] = '\0';
                     
-                    strcpy(subStrCopy, subStrPtr);
-                    
-                    char *token = strtok(subStrCopy, quoteDelimiter);
-                    if (token)
+                    char *subStrPtr = strstr(buffer, hrefStr);
+                    if (subStrPtr)
                     {
-                        token = strtok(NULL, quoteDelimiter);
-                        if (token && (strstr(token, ".htm") || strstr(token, ".html")))
+                        int length = (int)strlen(subStrPtr);
+                        char subStrCopy[length+1];
+                        memset(subStrCopy, '\0', sizeof(subStrCopy));
+                        
+                        strcpy(subStrCopy, subStrPtr);
+                        
+                        char *token = strtok(subStrCopy, quoteDelimiter);
+                        if (token)
                         {
-                            /*  Using the multiprocess approach here -
-                                Creating a new process for every accepted connection
-                             */
-                            int cachedCopyExists = -1;
-                            
-                            strcpy(clientHttpReqMsgParams.httpReqUri, token);
-                            strcpy(clientHttpReqMsgParams.httpReqMethod, "GET");
-                            strcpy(clientHttpReqMsgParams.httpReqVersion, "HTTP/1.1");
-                            
-                            pid_t child_pid = fork();
-                            if (child_pid == 0)
+                            token = strtok(NULL, quoteDelimiter);
+                            if (token && (strstr(token, ".htm") || strstr(token, ".html")))
                             {
-                                checkIfCachedCopyExists(token, hostName, &cachedCopyExists);
+                                /*  Using the multiprocess approach here -
+                                 Creating a new process for every accepted connection
+                                 */
+                                int cachedCopyExists = -1;
                                 
-                                if (cachedCopyExists != -1)
+                                strcpy(clientHttpReqMsgParams.httpReqUri, token);
+                                strcpy(clientHttpReqMsgParams.httpReqMethod, "GET");
+                                strcpy(clientHttpReqMsgParams.httpReqVersion, "HTTP/1.1");
+                                
+                                pid_t child_pid = fork();
+                                if (child_pid == 0)
                                 {
-                                    if (cachedCopyExists == 0)
+                                    checkIfCachedCopyExists(token, hostName, &cachedCopyExists);
+                                    
+                                    if (cachedCopyExists != -1)
                                     {
-                                        //printf("Call to sendHttpReqMsg with uri %s\n", clientHttpReqMsgParams.httpReqUri);
-                                        sendHttpReqMsgToServer(connId, clientHttpReqMsgParams, hostName, false);
+                                        if (cachedCopyExists == 0)
+                                        {
+                                            //printf("Call to sendHttpReqMsg with uri %s\n", clientHttpReqMsgParams.httpReqUri);
+                                            sendHttpReqMsgToServer(connId, clientHttpReqMsgParams, hostName, false);
+                                        }
                                     }
+                                    exit(0);
                                 }
-                                close(child_pid);
-                            }
-                            else if (child_pid > 0)
-                            {
-                                close(child_pid);
-                            }
-                            else
-                            {
-                                //printf("fork failed, %s\n", strerror(errno));
+                                else if (child_pid > 0)
+                                {
+                                    /* Do nothing */
+                                }
+                                else
+                                {
+                                    //printf("fork failed, %s\n", strerror(errno));
+                                }
                             }
                         }
                     }
+                    memset((char *)buffer, '\0', sizeof(buffer));
                 }
-                memset((char *)buffer, '\0', sizeof(buffer));
+                fclose(fp);
             }
-            fclose(fp);
+            else
+            {
+                printf("File Open failed\n");
+                return;
+            }
         }
-        else
-        {
-            printf("File Open failed\n");
-            return;
-        }
+        free(buffer);
+    }
+    else
+    {
+        printf("%s:%d:: malloc failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
     }
     
-    
-    free(buffer);
+    return;
 }
 
 void sendBadRequestResponse(int connId, http_req_msg_params *clientHttpReqMsgParams)
@@ -1559,6 +1697,7 @@ void sendBadRequestResponse(int connId, http_req_msg_params *clientHttpReqMsgPar
     send(connId, badRequestHttpResponse, strlen(badRequestHttpResponse), 0);
 }
 
+#if 0
 void sendInternalServerErrorResponse(int connId)
 {
     char internalServerErrorResponse[1024];
@@ -1610,6 +1749,7 @@ void sendFileNotFoundResponse(int connId, http_req_msg_params clientHttpReqMsgPa
     
     send(connId, notFoundHttpResponse, strlen(notFoundHttpResponse), 0);
 }
+#endif
 
 void sendForbiddenResponse(int connId, http_req_msg_params clientHttpReqMsgParams)
 {
