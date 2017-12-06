@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <sys/msg.h>
 #include <netdb.h>
 #include <dirent.h>
 #include <time.h>
@@ -71,6 +72,21 @@ int main(int argc, const char * argv[])
         close(fdescLocalFileForHostNameToIpAddr);
     }
     
+    FILE *fpDeleteFile = fopen("localDeleteFile.txt", "r");
+    if (fpDeleteFile)
+    {
+        fclose(fpDeleteFile);
+        remove("localDeleteFile.txt");
+        printf("localDeleteFile.txt removed successfully\n");
+    }
+    
+    fpDeleteFile = fopen("localDeleteFile_tmp.txt", "r");
+    if (fpDeleteFile)
+    {
+        fclose(fpDeleteFile);
+        remove("localDeleteFile_tmp.txt");
+    }
+    
     intSignalReceived = false;
     
     for (int i = 0; i < MAX_HOST_NAMES; i++)
@@ -108,8 +124,8 @@ int main(int argc, const char * argv[])
         printf("Web proxy socket successfully created\n");
     }
     
-    /*  Bind (Associate the server socket created with the port number and the
-        IP address
+    /*  Bind (Associate the server socket created with the port number and
+        the IP address.
      */
     if (bind(proxySock, /* socket descriptor */
              (struct sockaddr *)&proxySockAddr, /* socket address structure */
@@ -123,7 +139,7 @@ int main(int argc, const char * argv[])
         printf("Bind successful\n");
     }
     
-    if (signal(SIGINT, signalHandler) == SIG_ERR)
+    if (signal(SIGINT, signalHandlerForParent) == SIG_ERR)
         printf("\ncan't catch SIGINT\n");
     
     /*  Listen for incoming connections on the server socket */
@@ -133,7 +149,13 @@ int main(int argc, const char * argv[])
     
     printf("Waiting for incoming connections...\n");
     
-    //createProcessToHandleCacheExpiration();
+#ifdef ENABLE_CACHE_EXPIRATION
+    
+    createQueueForCacheExpireProcess();
+    
+    createProcessToHandleCacheExpiration();
+    
+#endif
     
     while (1)
     {
@@ -149,7 +171,7 @@ int main(int argc, const char * argv[])
                             (socklen_t *)&clientAddrLen /* addrlen */);
         if (clientSock < 0)
         {
-            printf("Accept failed\n");
+            printf("%s:%d:: accept failed, %s\n", __FUNCTION__,  __LINE__, strerror(errno));
             exit(1);
         }
         else
@@ -177,7 +199,7 @@ int main(int argc, const char * argv[])
              */
             close(proxySock);
             
-            if (signal(SIGINT, signalForChildHandler) == SIG_ERR)
+            if (signal(SIGINT, signalHandlerForChildProc) == SIG_ERR)
                 printf("\ncan't catch SIGINT\n");
             
             memset(httpReqMsgBuffer, '\0', HTTP_REQ_MSG_MAX_LEN);
@@ -229,6 +251,7 @@ int createSharedMemory(void)
     key_t               sharedMemoryKey;
     int                 sharedMemoryId;
     hostNameToIpAddr    *sharedMemoryDataPtr = malloc(20*100*1024*sizeof(char));
+    
     if (sharedMemoryDataPtr == NULL)
     {
         printf("%s:%d:: Malloc Failed\n", __FUNCTION__,  __LINE__);
@@ -260,7 +283,7 @@ int createSharedMemory(void)
     /*  Initialize the shared memory and write proxyHostNameToIpAddrStruct structure
         data to it.
      */
-    printf("Writing to shared memory\n");
+    //printf("Writing to shared memory\n");
     memcpy(sharedMemoryDataPtr, &proxyHostNameToIpAddrStruct, sizeof(proxyHostNameToIpAddrStruct));
     
     /*  Detach the memory segment */
@@ -273,7 +296,7 @@ int createSharedMemory(void)
     return 0;
 }
 
-void signalForChildHandler(int sig)
+void signalHandlerForChildProc(int sig)
 {
     if (sig == SIGINT)
     {
@@ -282,25 +305,32 @@ void signalForChildHandler(int sig)
     }
 }
 
-void signalHandler(int sig)
+void signalHandlerForParent(int sig)
 {
     printf("Signal Interrupt received. Gracefully exiting the server\n");
     if (sig == SIGINT)
     {
-        key_t   sharedMemoryKey;
-        int     sharedMemoryId;
+        key_t       sharedMemoryKey, queueKey, queueKey1;
+        int         sharedMemoryId, queueMsgId, queueMsgId1;
+        msgBuffer   queueSendBuffer, queueSendBuffer1;
+        
+        memset(&queueSendBuffer, '\0', sizeof(queueSendBuffer));
+        memset(&queueSendBuffer1, '\0', sizeof(queueSendBuffer1));
         
         wait(NULL);
         printf("Closing proxy socket\n");
         
-        /*  Create a memory key */
+        close(proxySock);
+        close(clientSock);
+        
+        /*  Create a memory key for shared memory */
         if ((sharedMemoryKey = ftok("webproxy.c", 'R')) == -1)
         {
             printf("%s:%d:: ftok failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
             return;
         }
         
-        /*  Request for shared memory */
+        /*  Get the shared memory */
         if ((sharedMemoryId = shmget(sharedMemoryKey, SHM_SIZE, 0644 | IPC_CREAT)) == -1)
         {
             printf("%s:%d:: shmget failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
@@ -318,10 +348,114 @@ void signalHandler(int sig)
             return;
         }
         
-        close(proxySock);
-        close(clientSock);
+#ifdef ENABLE_CACHE_EXPIRATION
+        /* Create a memory key for message queue */
+        if ((queueKey = ftok("webproxy.c", 'A')) == -1)
+        {
+            printf("%s:%d:: ftok failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+            return;
+        }
+        
+        /* Identify the queue that we want to destroy */
+        if ((queueMsgId = msgget(queueKey, 0644)) == -1)
+        {
+            printf("%s:%d:: msgget failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+            return;
+        }
+        
+        /* Send a message to the queue to kill the child process */
+        queueSendBuffer.msgType = 2;
+        strcpy(queueSendBuffer.msgText, "processStop");
+    
+        int length = (int)strlen(queueSendBuffer.msgText);
+        queueSendBuffer.msgText[length] = '\0';
+        
+        printf("Sending %s to message queue\n", queueSendBuffer.msgText);
+        if (msgsnd(queueMsgId, &queueSendBuffer, length+1, 0) == -1)
+        {
+            printf("%s:%d:: msgsnd failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+            return;
+        }
+        
+        /* Destroy the queue */
+        if (msgctl(queueMsgId, IPC_RMID, NULL) == -1)
+        {
+            printf("%s:%d:: msgctl failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+            return;
+        }
+        else
+        {
+            printf("Message Queue deleted successfully\n");
+        }
+        
+        sleep(2);
+        
+        /* Create a memory key for message queue */
+        if ((queueKey1 = ftok("webproxy.c", 'F')) == -1)
+        {
+            printf("%s:%d:: ftok failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+            return;
+        }
+        
+        /* Identify the queue that we want to destroy */
+        if ((queueMsgId1 = msgget(queueKey1, 0644)) == -1)
+        {
+            printf("%s:%d:: msgget failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+            return;
+        }
+        
+        /* Send a message to the queue to kill the child process */
+        queueSendBuffer1.msgType = 1;
+        strcpy(queueSendBuffer1.msgText, "processStop");
+        
+        int length1 = (int)strlen(queueSendBuffer1.msgText);
+        queueSendBuffer1.msgText[length1] = '\0';
+        
+        printf("Sending %s to message queue\n", queueSendBuffer1.msgText);
+        if (msgsnd(queueMsgId1, &queueSendBuffer1, length1+1, 0) == -1)
+        {
+            printf("%s:%d:: msgsnd failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+            return;
+        }
+        
+        sleep(2);
+        
+        /* Destroy the queue */
+        if (msgctl(queueMsgId1, IPC_RMID, NULL) == -1)
+        {
+            printf("%s:%d:: msgctl failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+            return;
+        }
+        else
+        {
+            printf("Message Queue deleted successfully\n");
+        }
+#endif
+        
         exit(0);
     }
+}
+
+void createQueueForCacheExpireProcess(void)
+{
+    int     msgId;
+    key_t   key;
+    
+    if ((key = ftok("webproxy.c", 'A')) == -1)
+    {
+        printf("%s:%d:: ftok failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
+        exit(1);
+    }
+
+    if ((msgId = msgget(key, 0644 | O_CREAT)) == -1)
+    {
+        printf("%s:%d:: msgget failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
+        exit(1);
+    }
+    
+    printf("Queue successfully created for cache expiration process\n");
+    
+    return;
 }
 
 void createProcessToHandleCacheExpiration(void)
@@ -337,157 +471,450 @@ void createProcessToHandleCacheExpiration(void)
             timeout value specified, then we delete the file.
          */
         
-        char *filePath = "./www.dspguide.com";
+        printf("Created a process to handle cache expiration\n");
         
-        DIR *dir = opendir(filePath);
-        if (dir)
+        if (signal(SIGINT, signalHandlerForCacheExpireProc) == SIG_ERR)
+            printf("\ncan't catch SIGINT\n");
+        
+        createProcessToCheckCacheExpireFile();
+        
+        bool            canReadFromQueue = false;
+        
+        key_t           queueKey, queueKey1;
+        int             queueMsgId = -1, queueMsgId1 = -1;
+        msgBuffer       queueBuffer, queueBuffer1;
+        
+        
+        char**          cacheBuffer;
+        int             cacheEntryIndex = 0;
+        bool            sentFirstMsgRcvdMsg = false;
+        
+        cacheBuffer = (char **)malloc(100*sizeof(char));
+        
+        for (int i = 0; i < 100; i++)
         {
-            closedir(dir);
+            cacheBuffer[i] = (char *)malloc(512*sizeof(char));
+        }
+        
+        memset(&queueBuffer, '\0', sizeof(queueBuffer));
+        memset(&queueBuffer1, '\0', sizeof(queueBuffer1));
+        
+        if ((queueKey = ftok("webproxy.c", 'A')) == -1)
+        {
+            printf("%s:%d:: ftok failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
         }
         else
         {
-            printf("Directory %s doesn't exist\n", filePath);
-            //return;
+            if ((queueMsgId = msgget(queueKey, 0644)) == -1)
+            {
+                printf("%s:%d:: msgget failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
+            }
+            else
+            {
+                printf("Message Queue (handle cache expiration) identified\n");
+                canReadFromQueue = true;
+            }
+        }
+        
+        if ((queueKey1 = ftok("webproxy.c", 'F')) == -1)
+        {
+            printf("%s:%d:: ftok failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
+        }
+        else
+        {
+            if ((queueMsgId1 = msgget(queueKey1, 0644 | O_CREAT)) == -1)
+            {
+                printf("%s:%d:: msgget failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
+            }
+            else
+            {
+                printf("Message Queue (check cache expire file parent) identified\n");
+            }
         }
         
         while(1)
         {
-            struct stat attrib;
-            stat(filePath, &attrib);
-            char createTime[20];
-            char lastAccessTime[20];
-            char lastModifiedTime[20];
-            char currentTime[20];
-            
-            struct timeval curTime;
-            
-            memset(createTime, '\0', sizeof(createTime));
-            memset(lastAccessTime, '\0', sizeof(lastAccessTime));
-            memset(lastModifiedTime, '\0', sizeof(lastModifiedTime));
-            memset(currentTime, '\0', sizeof(currentTime));
-            
-            struct tm t1, t2, t3, t4;
-            
-            tzset();
-            if (localtime_r(&(attrib.st_ctimespec.tv_sec), &t1))
+            if (canReadFromQueue == true)
             {
-                strftime(createTime, 20, "%F %T", &t1);
-            }
-            
-            if (localtime_r(&(attrib.st_atimespec.tv_sec), &t2))
-            {
-                strftime(lastAccessTime, 20, "%F %T", &t2);
-            }
-            
-            if (localtime_r(&(attrib.st_mtimespec.tv_sec), &t3))
-            {
-                strftime(lastModifiedTime, 20, "%F %T", &t3);
-            }
-            
-            //printf("==========================================\n");
-            //printf("File %s stats:\n", filePath);
-            //printf("Created Time: %s\n", createTime);
-            //printf("Last Access Time: %s\n", lastAccessTime);
-            //printf("Last Modified Time: %s\n", lastModifiedTime);
-            //printf("==========================================\n");
-            
-            gettimeofday(&curTime, NULL);
-            
-            if (localtime_r(&(curTime.tv_sec), &t4))
-            {
-                strftime(currentTime, 20, "%F %T", &t4);
-            }
-            
-            //printf("Current Time: %s\n", currentTime);
-            
-            if ((curTime.tv_sec - attrib.st_atimespec.tv_sec) > 300)
-            {
-                printf("==========================================\n");
-                printf("File %s stats:\n", filePath);
-                printf("Created Time: %s\n", createTime);
-                printf("Last Access Time: %s\n", lastAccessTime);
-                printf("Last Modified Time: %s\n", lastModifiedTime);
-                printf("==========================================\n");
+                msgrcv(queueMsgId, &queueBuffer, sizeof(queueBuffer), 2, 0);
                 
-                printf("Its been %ld secs since last time %s was accessed. Deleting the folder corressponding to the file.\n",
-                       (curTime.tv_sec - attrib.st_atimespec.tv_sec), filePath);
+                //printf("Message from queue: %s\n", queueBuffer.msgText);
+                if (strcmp(queueBuffer.msgText, "processStop") == 0)
+                {
+                    printf("Killing process that was created to handle cache expiration\n");
+                    
+                    for (int i = 0; i < 100; i++)
+                    {
+                        free(cacheBuffer[i]);
+                    }
+                    free(cacheBuffer);
+                    
+                    break;
+                }
                 
-                remove_directory(filePath);
+                writeToCacheFile(queueBuffer.msgText, cacheBuffer, cacheEntryIndex);
+                
+                //printf("Contents of cache buffer:\n");
+                //for (int i = 0; i < cacheEntryIndex; i++)
+                //{
+                //    printf("%s\n", *(cacheBuffer+i));
+                //}
+                cacheEntryIndex++;
+                
+                if (false == sentFirstMsgRcvdMsg)
+                {
+                    queueBuffer1.msgType = 1;
+                    strcpy(queueBuffer1.msgText, "Start");
+                    
+                    int length = (int)strlen(queueBuffer1.msgText);
+                    queueBuffer1.msgText[length] = '\0';
+                    
+                    printf("Sending start message to the process handling file deletion\n");
+                    msgsnd(queueMsgId1, &queueBuffer1, length+1, 0);
+                    sentFirstMsgRcvdMsg = true;
+                }
+                
+                memset(&queueBuffer, '\0', sizeof(queueBuffer));
             }
+            
+            sleep(2);
         }
         
+        printf("Killed the process handling cache expiration\n");
+        exit(0);
     }
     else if (childPid > 0)
     {
         /*  Parent process */
         return;
     }
+    else
+    {
+        printf("%s:%d:: fork failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+    }
 }
 
-int remove_directory(const char *path)
+void signalHandlerForCacheExpireProc(int sig)
 {
-    DIR *d = opendir(path);
-    size_t path_len = strlen(path);
-    int r = -1;
-    
-    if (d)
+    if (sig == SIGINT)
     {
-        struct dirent *p;
+        exit(0);
+    }
+}
+
+void createProcessToCheckCacheExpireFile(void)
+{
+    pid_t childPid;
+    
+    childPid = fork();
+    
+    if (childPid == 0)
+    {
+        printf("Created a process to handle cache file deletion\n");
         
-        r = 0;
+        if (signal(SIGINT, signalHandlerForFileDeleteProc) == SIG_ERR)
+            printf("\ncan't catch SIGINT\n");
         
-        while (!r && (p = readdir(d)))
+        /* Child Process */
+        key_t           queueKey;
+        int             queueMsgId = -1;
+        msgBuffer       queueBuffer;
+        
+        timeInfoStruct  timeInfo[100];
+        
+        bool            canReadFromQueue = false;
+        
+        for (int i = 0; i < 100; i++)
         {
-            int r2 = -1;
-            char *buf;
-            size_t len;
+            timeInfo[i].lastAccessTime = -1;
+            timeInfo[i].lastModifiedTime = -1;
+        }
+        
+        if ((queueKey = ftok("webproxy.c", 'F')) == -1)
+        {
+            printf("%s:%d:: ftok failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
+        }
+        else
+        {
+            if ((queueMsgId = msgget(queueKey, 0644)) == -1)
+            {
+                printf("%s:%d:: msgget failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
+            }
+            else
+            {
+                printf("Message Queue (handle file deletion) identified\n");
+                canReadFromQueue = true;
+            }
+        }
+        
+        memset(&queueBuffer, '\0', sizeof(queueBuffer));
+        
+        while (canReadFromQueue == true)
+        {
+            msgrcv(queueMsgId, &queueBuffer, sizeof(queueBuffer), 1, 0);
             
-            /* Skip the names "." and ".." as we don't want to recurse on them. */
-            if (!strcmp(p->d_name, ".") || !strcmp(p->d_name, ".."))
+            if (strcmp(queueBuffer.msgText, "Start") != 0)
             {
                 continue;
             }
-            
-            len = path_len + strlen(p->d_name) + 2; // +1 for / and another +1 for \0
-            buf = malloc(len);
-            
-            if (buf)
+            else
             {
-                struct stat statbuf;
-                
-                snprintf(buf, len, "%s/%s", path, p->d_name);
-                
-                if (!stat(buf, &statbuf))
-                {
-                    if (S_ISDIR(statbuf.st_mode))
-                    {
-                        r2 = remove_directory(buf);
-                        printf("remove_directory %s\n", buf);
-                    }
-                    else
-                    {
-                        //r2 = unlink(buf);
-                        printf("unlinking directory %s\n", buf);
-                        r2 = 0;
-                    }
-                }
-                
-                free(buf);
+                printf("Received start message from parent process\n");
+                break;
             }
-            
-            r = r2;
         }
         
-        closedir(d);
+        
+        bool    isDeleted = false;
+        char    *buffer;
+        size_t  numBytes = 512;
+        ssize_t bytesRead = -1;
+        
+        buffer = malloc(numBytes*sizeof(char));
+        
+        while (1)
+        {
+            memset(&queueBuffer, '\0', sizeof(queueBuffer));
+            msgrcv(queueMsgId, &queueBuffer, sizeof(queueBuffer), 1, IPC_NOWAIT);
+            
+            if (strcmp(queueBuffer.msgText, "processStop") == 0)
+            {
+                printf("Killing process that was created to handle cache expire file\n");
+                
+                break;
+            }
+            
+            int curIndex = 0;
+            
+            FILE *fp = fopen("localDeleteFile.txt", "r");
+            while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
+            {
+                //checkIfFileIsToBeDeleted(cacheBuffer[i], &timeInfoStruct[i], &isDeleted);
+                //printf("Checking if file %s needs to be deleted\n", buffer);
+                checkIfFileIsToBeDeleted(buffer, &timeInfo[curIndex], &isDeleted);
+                
+                curIndex++;
+            
+                if (isDeleted == true)
+                {
+                    fclose(fp);
+                    deleteEntryFromLocalFile(buffer);
+                    fp = fopen("localDeleteFile.txt", "r");
+                    curIndex--;
+                }
+            }
+            fclose(fp);
+            
+            sleep(2);
+        }
+        
+        free(buffer);
+        printf("Killed the process handling cache file deletion\n");
+        exit(0);
+        
     }
-    
-    if (!r)
+    else if (childPid > 0)
     {
-        printf("rmdir %s\n", path);
-        //r = rmdir(path);
+        /* Parent Process */
+        return;
+    }
+    else
+    {
+        printf("%s:%d:: fork failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
     }
     
-    return r;
+    return;
+}
+
+void signalHandlerForFileDeleteProc(int sig)
+{
+    if (sig == SIGINT)
+    {
+        exit(0);
+    }
+}
+
+void writeToCacheFile(char *file, char **cacheBuffer, int cacheEntryIndex)
+{
+    char    *buffer;
+    size_t  numBytes = 120;
+    ssize_t bytesRead;
+    bool    entryExists = false;
+    
+    buffer = (char *)malloc(numBytes*sizeof(char));
+    
+    if (cacheEntryIndex != 0)
+    {
+        for (int i = 0; i < cacheEntryIndex; i++)
+        {
+            if (strcmp(*(cacheBuffer+i), file) == 0)
+            {
+                return;
+            }
+        }
+    }
+    
+    printf("Entry %s doesn't exist. Writing to cacheBuffer\n", file);
+    strcpy(*(cacheBuffer+cacheEntryIndex), file);
+    
+    FILE *fpDeleteFile = fopen("localDeleteFile.txt", "a");
+    char fileWriteBuffer[512];
+    
+    for (int i = 0; i < cacheEntryIndex; i++)
+    {
+        entryExists = false;
+        
+        memset(fileWriteBuffer, '\0', sizeof(fileWriteBuffer));
+        sprintf(fileWriteBuffer, "%s%c", *(cacheBuffer+i), '\n');
+        
+        FILE *fp = fopen("localDeleteFile.txt", "r");
+        if (fp)
+        {
+            while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
+            {
+                int len = (int)strlen(buffer);
+                buffer[len] = '\0';
+                
+                if(strstr(buffer, *(cacheBuffer+i)))
+                {
+                    PRINT_DEBUG_MESSAGE("Entry already exists\n");
+                    entryExists = true;
+                    break;
+                }
+            }
+            fclose(fp);
+        }
+        
+        if (entryExists == false)
+        {
+            fwrite(fileWriteBuffer, sizeof(char), strlen(fileWriteBuffer), fpDeleteFile);
+        }
+        
+    }
+    
+    fclose(fpDeleteFile);
+    
+    return;
+}
+
+void checkIfFileIsToBeDeleted(char *file, struct _timeInfoStruct_ *timeInfo, bool *deleted)
+{
+    //long lastAccessTime = -1;
+    long lastModifiedTime = -1;
+    
+    struct timespec curTime;
+    *deleted = false;
+    
+    if (*file == '\0')
+    {
+        return;
+    }
+    
+    int fileLen = (int)strlen(file);
+    if (*(file+fileLen-1) == '\n')
+    {
+        *(file+fileLen-1) = '\0';
+    }
+    
+    //char accessTimeCommand[100];
+    char modifiedTimeCommand[100];
+    
+    //memset(accessTimeCommand, '\0', sizeof(accessTimeCommand));
+    memset(modifiedTimeCommand, '\0', sizeof(modifiedTimeCommand));
+    
+    //sprintf(accessTimeCommand, "%s %s %s > %s", "stat -f", "%a", file, "out.txt");
+    //printf("accessTimeCommand: %s\n", accessTimeCommand);
+    //system(accessTimeCommand);
+    
+    sprintf(modifiedTimeCommand, "%s %s %s > %s", "stat -f", "%m", file, "out.txt");
+    //printf("modifiedTimeCommand: %s\n", modifiedTimeCommand);
+    system(modifiedTimeCommand);
+    
+    FILE *fp = fopen("out.txt", "r");
+    if (fp)
+    {
+        fscanf(fp, "%ld", &lastModifiedTime);
+        remove("out.txt");
+        fclose(fp);
+    }
+    
+    clock_gettime(CLOCK_REALTIME, &curTime);
+    
+    //printf("Current Time: %ld, Last Modified Time: %ld\n", curTime.tv_sec, lastModifiedTime);
+    
+    if ((curTime.tv_sec - lastModifiedTime) > 150)
+    {
+        
+        printf("Its been %ld secs since last time %s was accessed. Deleting the file.\n",
+               (curTime.tv_sec - lastModifiedTime), file);
+        
+        if (remove(file) == -1)
+        {
+            printf("File %s delete failed\n", file);
+        }
+        else
+        {
+            printf("File %s deleted successfully\n", file);
+            *deleted = true;
+        }
+    }
+    
+    return;
+}
+
+void deleteEntryFromLocalFile(char *lineToMatch)
+{
+    FILE    *fpRead = fopen("localDeleteFile.txt", "r");
+    FILE    *fpWrite = fopen("localDeleteFile_tmp.txt", "r");
+    
+    if (fpWrite)
+    {
+        remove("localDeleteFile_tmp.txt");
+        fclose(fpWrite);
+    }
+    
+    fpWrite = fopen("localDeleteFile_tmp.txt", "w");
+    
+    char    *buffer;
+    size_t  numBytes = 512;
+    ssize_t bytesRead = -1;
+    
+    char bufferCopy[512];
+    
+    buffer = malloc(sizeof(char)*numBytes);
+    
+    while ((bytesRead = getline(&buffer, &numBytes, fpRead)) != -1)
+    {
+        memset(bufferCopy, '\0', sizeof(bufferCopy));
+        strcpy(bufferCopy, buffer);
+        int bufferLen = (int)strlen(bufferCopy);
+        
+        if (*(bufferCopy + bufferLen - 1) == '\n')
+            *(bufferCopy + bufferLen - 1) = '\0';
+        
+        if (strcmp(bufferCopy, lineToMatch) == 0)
+        {
+            continue;
+        }
+        else
+        {
+            fwrite(buffer, sizeof(char), strlen(buffer), fpWrite);
+        }
+    }
+    
+    free(buffer);
+    
+    fclose(fpRead);
+    fclose(fpWrite);
+    
+    char copySystemCommand[100];
+    memset(copySystemCommand, '\0', sizeof(copySystemCommand));
+    
+    sprintf(copySystemCommand, "%s %s %s", "cp", "localDeleteFile_tmp.txt", "localDeleteFile.txt");
+    
+    system(copySystemCommand);
+    
+    return;
 }
 
 int handleConnRequest(int connId, char *httpReqMsgBuffer)
@@ -925,7 +1352,7 @@ void writeHostNameToIpAddrToLocalFile(char *hostName, char *ipAddress)
 
 int handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgParams, char *hostName)
 {
-    int cachedCopyExists = 0;
+    int         cachedCopyExists = 0;
     
     int blockCheckRetVal = checkIfHostIsBlocked(hostName);
     if (blockCheckRetVal == -1)
@@ -975,7 +1402,13 @@ int handleGetRequest(int connId, http_req_msg_params clientHttpReqMsgParams, cha
 #endif
         
         //parseIndexFileForLinks(connId, fullFilePath);
-        //createProcessForPrefetching(connId, fullFilePath);
+#ifdef ENABLE_CACHE_PREFETCHING
+        createProcessForPrefetching(connId, fullFilePath);
+#endif
+        
+#ifdef ENABLE_CACHE_EXPIRATION
+        sendMsgToCacheExpireQueue(fullFilePath);
+#endif
     }
     
     return 0;
@@ -1055,7 +1488,8 @@ void checkIfCachedCopyExists(char *reqUrl, char *hostName, int *cachedCopyExists
             sprintf(folderName, "%s/%s", "tempDir", hostName);
             strcpy(fileName, "index.html");
 #else
-            strcpy(fileName, "/");
+            strcpy(folderName, hostName);
+            strcpy(fileName, "index.html");
 #endif
         }
         else
@@ -1102,6 +1536,7 @@ void checkIfCachedCopyExists(char *reqUrl, char *hostName, int *cachedCopyExists
     }
     
     PRINT_DEBUG_MESSAGE("reqUrl: %s, folderName: %s, fileName: %s\n", reqUrl, folderName, fileName);
+    printf("reqUrl: %s, folderName: %s, fileName: %s\n", reqUrl, folderName, fileName);
     
     bool found = 0;
 #ifdef USE_TEMP_DIRECTORY
@@ -1167,6 +1602,10 @@ void checkIfDirAndFileExists(char *folderName, char *fileName, bool *found)
         {
             *found = true;
             fclose(fp);
+        }
+        else
+        {
+            *found = false;
         }
         
         closedir(dir);
@@ -1669,6 +2108,42 @@ void parseIndexFileForLinks(int connId, char *filePath)
     }
     
     return;
+}
+
+int sendMsgToCacheExpireQueue(char *filePath)
+{
+    msgBuffer   queueBuffer;
+    key_t       key;
+    int         msgId;
+    
+    memset(&queueBuffer, '\0', sizeof(msgBuffer));
+    
+    if ((key = ftok("webproxy.c", 'A')) == -1)
+    {
+        printf("%s:%d:: ftok failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+        return -1;
+    }
+    
+    if ((msgId = msgget(key, 0644)) == -1)
+    {
+        printf("%s:%d:: msgget failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+        return -1;
+    }
+    
+    queueBuffer.msgType = 2;
+    strcpy(queueBuffer.msgText, filePath);
+    
+    int length = (int)strlen(queueBuffer.msgText);
+    queueBuffer.msgText[length] = '\0';
+    
+    //printf("Sending %s to message queue\n", filePath);
+    if (msgsnd(msgId, &queueBuffer, length+1, 0) == -1)
+    {
+        printf("%s:%d:: msgsnd failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+        return -1;
+    }
+    
+    return 0;
 }
 
 void sendBadRequestResponse(int connId, http_req_msg_params *clientHttpReqMsgParams)
