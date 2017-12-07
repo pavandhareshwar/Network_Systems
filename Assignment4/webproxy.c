@@ -265,6 +265,8 @@ int createSharedMemory(void)
         return -1;
     }
     
+    //printf("Shared memory key (creation): %d\n", sharedMemoryKey);
+    
     /*  Request for shared memory */
     if ((sharedMemoryId = shmget(sharedMemoryKey, SHM_SIZE, 0644 | IPC_CREAT)) == -1)
     {
@@ -310,12 +312,17 @@ void signalHandlerForParent(int sig)
     printf("Signal Interrupt received. Gracefully exiting the server\n");
     if (sig == SIGINT)
     {
-        key_t       sharedMemoryKey, queueKey, queueKey1;
-        int         sharedMemoryId, queueMsgId, queueMsgId1;
+        key_t       sharedMemoryKey;
+        int         sharedMemoryId;
+        
+#ifdef ENABLE_CACHE_EXPIRATION
+        int         queueMsgId, queueMsgId1;
+        ket_t       queueKey, queueKey1;
         msgBuffer   queueSendBuffer, queueSendBuffer1;
         
         memset(&queueSendBuffer, '\0', sizeof(queueSendBuffer));
         memset(&queueSendBuffer1, '\0', sizeof(queueSendBuffer1));
+#endif
         
         wait(NULL);
         printf("Closing proxy socket\n");
@@ -330,8 +337,10 @@ void signalHandlerForParent(int sig)
             return;
         }
         
+        //printf("Shared memory key (deletion): %d\n", sharedMemoryKey);
+        
         /*  Get the shared memory */
-        if ((sharedMemoryId = shmget(sharedMemoryKey, SHM_SIZE, 0644 | IPC_CREAT)) == -1)
+        if ((sharedMemoryId = shmget(sharedMemoryKey, SHM_SIZE, 0644)) == -1)
         {
             printf("%s:%d:: shmget failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
             return;
@@ -388,7 +397,7 @@ void signalHandlerForParent(int sig)
             printf("Message Queue deleted successfully\n");
         }
         
-        sleep(2);
+        sleep(1);
         
         /* Create a memory key for message queue */
         if ((queueKey1 = ftok("webproxy.c", 'F')) == -1)
@@ -418,7 +427,7 @@ void signalHandlerForParent(int sig)
             return;
         }
         
-        sleep(2);
+        sleep(1);
         
         /* Destroy the queue */
         if (msgctl(queueMsgId1, IPC_RMID, NULL) == -1)
@@ -458,6 +467,7 @@ void createQueueForCacheExpireProcess(void)
     return;
 }
 
+#ifdef ENABLE_CACHE_EXPIRATION
 void createProcessToHandleCacheExpiration(void)
 {
     pid_t childPid;
@@ -916,6 +926,7 @@ void deleteEntryFromLocalFile(char *lineToMatch)
     
     return;
 }
+#endif
 
 int handleConnRequest(int connId, char *httpReqMsgBuffer)
 {
@@ -968,7 +979,7 @@ int handleConnRequest(int connId, char *httpReqMsgBuffer)
             strcpy(restOfHttpReqMsg, ptrHttpReqMsgBufferCopy2);
         }
         
-        char hostName[100];
+        char hostName[HOSTNAME_MAX_LEN];
         memset(hostName, '\0', sizeof(hostName));
         
         char httpReqMsgBufferCopy[HTTP_REQ_MSG_MAX_LEN];
@@ -1466,10 +1477,10 @@ int checkIfHostIsBlocked(char *hostName)
 
 void checkIfCachedCopyExists(char *reqUrl, char *hostName, int *cachedCopyExists)
 {
-    char folderToCheck[100];
-    char reqUrlCopy[100];
-    char folderName[100];
-    char fileName[100];
+    char folderToCheck[FOLDER_NAME_MAX_LEN];
+    char reqUrlCopy[REQ_URL_MAX_LEN];
+    char folderName[FOLDER_NAME_MAX_LEN];
+    char fileName[FOLDER_NAME_MAX_LEN];
     
     memset(folderToCheck, '\0', sizeof(folderToCheck));
     memset(reqUrlCopy, '\0', sizeof(reqUrlCopy));
@@ -1497,7 +1508,7 @@ void checkIfCachedCopyExists(char *reqUrl, char *hostName, int *cachedCopyExists
             memcpy(subStr, subStr+1, strlen(subStr));
             strcpy(folderToCheck, subStr);
             
-            char folderToCheckCopy[100];
+            char folderToCheckCopy[FOLDER_NAME_MAX_LEN];
             memset(folderToCheckCopy, '\0', sizeof(folderToCheckCopy));
             
             strcpy(folderToCheckCopy, folderToCheck);
@@ -1514,7 +1525,7 @@ void checkIfCachedCopyExists(char *reqUrl, char *hostName, int *cachedCopyExists
                 {
                     if (folderToCheckCopy[i] == '/')
                     {
-                        char folderNameTemp[100];
+                        char folderNameTemp[FOLDER_NAME_MAX_LEN];
                         memset(folderNameTemp, '\0', sizeof(folderNameTemp));
                         strncpy(folderNameTemp, folderToCheckCopy, i);
 #ifdef USE_TEMP_DIRECTORY
@@ -1536,7 +1547,6 @@ void checkIfCachedCopyExists(char *reqUrl, char *hostName, int *cachedCopyExists
     }
     
     PRINT_DEBUG_MESSAGE("reqUrl: %s, folderName: %s, fileName: %s\n", reqUrl, folderName, fileName);
-    printf("reqUrl: %s, folderName: %s, fileName: %s\n", reqUrl, folderName, fileName);
     
     bool found = 0;
 #ifdef USE_TEMP_DIRECTORY
@@ -1585,7 +1595,7 @@ void checkIfCachedCopyExists(char *reqUrl, char *hostName, int *cachedCopyExists
 
 void checkIfDirAndFileExists(char *folderName, char *fileName, bool *found)
 {
-    char fullFilePath[100];
+    char fullFilePath[FOLDER_NAME_MAX_LEN];
     memset(fullFilePath, '\0', sizeof(fullFilePath));
     sprintf(fullFilePath, "%s/%s", folderName, fileName);
     
@@ -1614,7 +1624,7 @@ void checkIfDirAndFileExists(char *folderName, char *fileName, bool *found)
     {
         *found = false;
         char slashDelimiter[] = "/";
-        char folderNameCopy[100];
+        char folderNameCopy[FOLDER_NAME_MAX_LEN];
         memset(folderNameCopy, '\0', sizeof(folderNameCopy));
         
         strcpy(folderNameCopy, folderName);
@@ -1664,7 +1674,7 @@ void checkIfDirectoryExists(char *dirName)
 int sendCachedCopyToClient(int connId, http_req_msg_params clientHttpReqMsgParams, char *hostName)
 {
     char *fullFilePath = strstr(clientHttpReqMsgParams.httpReqUri, hostName);
-    char hostNameWithSlash[100];
+    char hostNameWithSlash[HOSTNAME_MAX_LEN];
     memset(hostNameWithSlash, '\0', sizeof(hostNameWithSlash));
     
     sprintf(hostNameWithSlash, "%s%s", hostName, "/");
@@ -1721,13 +1731,13 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
     struct sockaddr_in serverAddr;
     int serverPort = 80;
     
-    char reqUrlCopy[256];
+    char reqUrlCopy[REQ_URL_MAX_LEN];
     memset(reqUrlCopy, '\0', sizeof(reqUrlCopy));
     
     strcpy(reqUrlCopy, clientHttpReqMsgParams.httpReqUri);
     
     char *fullFilePath = strstr(reqUrlCopy, hostName);
-    char hostNameWithSlash[100];
+    char hostNameWithSlash[HOSTNAME_MAX_LEN];
     memset(hostNameWithSlash, '\0', sizeof(hostNameWithSlash));
     
     sprintf(hostNameWithSlash, "%s%s", hostName, "/");
@@ -1759,8 +1769,8 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
     }
     
     char ipAddr[100];
-    
     memset(ipAddr, '\0', sizeof(ipAddr));
+    
     checkIpForHostNameInLocalFile(hostName, ipAddr);
     
     proxy_http_req_msg_params proxyHttpReqMsgParams;
@@ -1778,7 +1788,7 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
         to the client as part of the response message.
      */
     
-    //printf("Requesting %s\n", fullFilePath);
+    //printf("Requesting %s from IP addr %s\n", fullFilePath, ipAddr);
     char proxyReqToServer[2048];
     memset(proxyReqToServer, '\0', sizeof(proxyReqToServer));
     
@@ -1788,9 +1798,10 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
     serverAddr.sin_port = htons(serverPort);
     serverAddr.sin_family = AF_INET;
     inet_pton(AF_INET, ipAddr, &serverAddr.sin_addr);
+    //memcpy(&serverAddr.sin_addr.s_addr, ipAddr, strlen(ipAddr));
     
-    //int tcpSocket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
-    int tcpSocket = socket(PF_INET, SOCK_STREAM, 0);
+    int tcpSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    //int tcpSocket = socket(PF_INET, SOCK_STREAM, 0);
     
     if (tcpSocket < 0)
         printf("Error opening socket\n");
@@ -1835,10 +1846,17 @@ void checkIpForHostNameInLocalFile(char *hostName, char *ipAddr)
     size_t  numBytes = 256;
     ssize_t bytesRead;
     bool    performDNSquery = false;
-    char    ipAddressList[100];
+    char    ipAddressList[512];
     char    commaDeLimiter[] = ",";
+    bool    matchFound = false;
+    
+    char    hostNameCopy[HOSTNAME_MAX_LEN];
     
     memset(ipAddressList, '\0', sizeof(ipAddressList));
+    memset(hostNameCopy, '\0', sizeof(hostNameCopy));
+    
+    strcpy(hostNameCopy, hostName);
+    memcpy(hostNameCopy, hostNameCopy+4, strlen(hostNameCopy)); // removing www. from hostname
     
     fp = fopen(LOCAL_DNS_CACHE_FILE, "r");
     if (!fp)
@@ -1852,58 +1870,75 @@ void checkIpForHostNameInLocalFile(char *hostName, char *ipAddr)
         
         while ((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
         {
-            if (strstr(buffer, hostName))
+            if (strstr(buffer, hostName) || strstr(buffer, hostNameCopy))
             {
-                memcpy(buffer, buffer + strlen(hostName) + 1, strlen(buffer));
+                if (strstr(buffer, hostName))
+                {
+                    memcpy(buffer, buffer + strlen(hostName) + 1, strlen(buffer));
+                }
+                
+                if (strstr(buffer, hostNameCopy))
+                {
+                    memcpy(buffer, buffer + strlen(hostNameCopy) + 1, strlen(buffer));
+                }
                 strcpy(ipAddressList, buffer);
+                matchFound = true;
                 break;
             }
         }
         
-        if (*(ipAddressList + strlen(ipAddressList) - 1) == '\n')
-            *(ipAddressList + strlen(ipAddressList) - 1) = '\0';
-        
-        if (strstr(ipAddressList, ","))
+        if (matchFound == true)
         {
-            char *token = strtok(ipAddressList, commaDeLimiter);
-            while (token)
+            if (*(ipAddressList + strlen(ipAddressList) - 1) == '\n')
+                *(ipAddressList + strlen(ipAddressList) - 1) = '\0';
+            
+            if (strstr(ipAddressList, ","))
             {
-                printf("%d: token: %s\n", __LINE__, token);
+                char *token = strtok(ipAddressList, commaDeLimiter);
+                while (token)
+                {
+                    printf("%d: token: %s\n", __LINE__, token);
+                    bool ipAddrWorks = false;
+                    testIpAddress(ipAddressList, &ipAddrWorks);
+                    if (ipAddrWorks == true)
+                    {
+                        strcpy(ipAddr, ipAddressList);
+                        performDNSquery = false;
+                        break;
+                    }
+                    else
+                    {
+                        token = strtok(NULL, commaDeLimiter);
+                    }
+                }
+            }
+            else
+            {
                 bool ipAddrWorks = false;
                 testIpAddress(ipAddressList, &ipAddrWorks);
+                
                 if (ipAddrWorks == true)
                 {
                     strcpy(ipAddr, ipAddressList);
                     performDNSquery = false;
-                    break;
                 }
                 else
                 {
-                    token = strtok(NULL, commaDeLimiter);
+                    performDNSquery = true;
                 }
             }
         }
         else
         {
-            bool ipAddrWorks = false;
-            testIpAddress(ipAddressList, &ipAddrWorks);
-            
-            if (ipAddrWorks == true)
-            {
-                strcpy(ipAddr, ipAddressList);
-                performDNSquery = false;
-            }
-            else
-            {
-                performDNSquery = true;
-            }
+            performDNSquery = true;
         }
+        
         fclose(fp);
     }
     
     if (performDNSquery == true)
     {
-        printf("No entry exists for hostname %s in %s. Performing DNS lookup.\n", hostName, LOCAL_DNS_CACHE_FILE);
+        //printf("No entry exists for hostname %s in %s. Performing DNS lookup.\n", hostName, LOCAL_DNS_CACHE_FILE);
         if((hp = gethostbyname(hostName)) == NULL)
         {
             herror("gethostbyname");
@@ -1960,9 +1995,13 @@ void composeHttpReqMsg(proxy_http_req_msg_params proxyHttpReqMsgParams, char *pr
     //sprintf(proxyReqToServer, "GET %s HTTP/1.1\r\nHost: %s\r\nContent-Type: text/plain\r\n\r\n",
     //        proxyHttpReqMsgParams.clientHttpReqMsgParams.httpReqUri , proxyHttpReqMsgParams.hostName);
     
-    sprintf(proxyReqToServer, "GET %s HTTP/1.1\r\n", proxyHttpReqMsgParams.clientHttpReqMsgParams.httpReqUri);
+    sprintf(proxyReqToServer, "GET %s %s\r\n", proxyHttpReqMsgParams.clientHttpReqMsgParams.httpReqUri,
+            proxyHttpReqMsgParams.clientHttpReqMsgParams.httpReqVersion);
     
     strcat(proxyReqToServer, restOfHttpReqMsg);
+    
+    int length = (int)strlen(proxyReqToServer);
+    *(proxyReqToServer+length) = '\0';
     
     PRINT_DEBUG_MESSAGE("GET request to server: %s\n", proxyReqToServer);
     
@@ -2008,8 +2047,8 @@ void parseIndexFileForLinks(int connId, char *filePath)
     char    quoteDelimiter[] = "\"";
     char    slashDelimiter[] = "/";
     
-    char    hostName[100];
-    char    filePathCopy[512];
+    char    hostName[HOSTNAME_MAX_LEN];
+    char    filePathCopy[FOLDER_NAME_MAX_LEN];
     
     memset(hostName, '\0', sizeof(hostName));
     memset(filePathCopy, '\0', sizeof(filePathCopy));
@@ -2110,6 +2149,7 @@ void parseIndexFileForLinks(int connId, char *filePath)
     return;
 }
 
+#ifdef ENABLE_CACHE_EXPIRATION
 int sendMsgToCacheExpireQueue(char *filePath)
 {
     msgBuffer   queueBuffer;
@@ -2145,6 +2185,7 @@ int sendMsgToCacheExpireQueue(char *filePath)
     
     return 0;
 }
+#endif
 
 void sendBadRequestResponse(int connId, http_req_msg_params *clientHttpReqMsgParams)
 {

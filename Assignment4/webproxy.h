@@ -33,6 +33,10 @@
 //#define ENABLE_CACHE_EXPIRATION         (1)
 //#define ENABLE_CACHE_PREFETCHING        (1)
 
+#define HOSTNAME_MAX_LEN                (512)
+#define FOLDER_NAME_MAX_LEN             (512)
+#define REQ_URL_MAX_LEN                 (1024)
+
 #ifdef PRINT_DEBUG_MESSAGES
 #define PRINT_DEBUG_MESSAGE(...) do{ fprintf( stderr, __VA_ARGS__ ); } while( false )
 #else
@@ -41,9 +45,9 @@
 
 typedef struct _http_req_msg_params_
 {
-    char    httpReqMethod[10]; /* Extract the HTTP request method in here */
-    char    httpReqUri[256]; /* Extract the HTTP request URI in here */
-    char    httpReqVersion[50]; /* Extract the HTTP request version in here */
+    char    httpReqMethod[10];              /* Extract the HTTP request method in here */
+    char    httpReqUri[REQ_URL_MAX_LEN];    /* Extract the HTTP request URI in here */
+    char    httpReqVersion[50];             /* Extract the HTTP request version in here */
 }http_req_msg_params;
 
 typedef struct _proxy_http_req_msg_params_
@@ -167,7 +171,9 @@ static void checkIfCachedCopyExists(char *reqUrl, char *hostName, int *cachedCop
 static void checkIfDirAndFileExists(char *folderName, char *fileName, bool *found);
 static void checkIfDirectoryExists(char *dirName);
 static int sendCachedCopyToClient(int connId, http_req_msg_params clientHttpReqMsgParams, char *hostName);
+#ifdef ENABLE_CACHE_EXPIRATION
 static int sendMsgToCacheExpireQueue(char *filePath);
+#endif
 
 
 static int checkIfHostIsBlocked(char *hostName);
@@ -175,19 +181,29 @@ static void parseIndexFileForLinks(int connId, char *filePath);
 static void writeHostNameToIpAddrToLocalFile(char *hostName, char *ipAddress);
 static void checkIpForHostNameInLocalFile(char *hostName, char *ipAddr);
 static void testIpAddress(char *ipAddrToTest, bool *ipAddrWorks);
+
+#ifdef ENABLE_CACHE_EXPIRATION
 static void writeToCacheFile(char *file, char **cacheBuffer, int cacheEntryIndex);
 static void checkIfFileIsToBeDeleted(char *file, struct _timeInfoStruct_ *timeInfo, bool *deleted);
 static void deleteEntryFromLocalFile(char *lineToMatch);
+#endif
 
+#ifdef ENABLE_CACHE_PREFETCHING
 static void createProcessForPrefetching(int connId, char *fullFilePath);
+#endif
+
+#ifdef ENABLE_CACHE_EXPIRATION
 static void createQueueForCacheExpireProcess(void);
 static void createProcessToHandleCacheExpiration(void);
 static void createProcessToCheckCacheExpireFile(void);
+#endif
 static int createSharedMemory(void);
 static void signalHandlerForChildProc(int sig);
 static void signalHandlerForParent(int sig);
 
+#ifdef ENABLE_CACHE_EXPIRATION
 static void signalHandlerForCacheExpireProc(int sig);
 static void signalHandlerForFileDeleteProc(int sig);
+#endif
 
 #endif /* webproxy_h */
