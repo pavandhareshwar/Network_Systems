@@ -20,6 +20,8 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/msg.h>
+#include <dispatch/dispatch.h>
+#include <sys/semaphore.h>
 #include <netdb.h>
 #include <dirent.h>
 #include <time.h>
@@ -43,7 +45,7 @@ int main(int argc, const char * argv[])
     }
     
     int proxyPortNum = atoi(argv[1]);
-    //int timeout = atoi(argv[2]);
+    cacheTimeOut = atoi(argv[2]);
     
     memset(restOfHttpReqMsg, '\0', sizeof(restOfHttpReqMsg));
     
@@ -317,7 +319,7 @@ void signalHandlerForParent(int sig)
         
 #ifdef ENABLE_CACHE_EXPIRATION
         int         queueMsgId, queueMsgId1;
-        ket_t       queueKey, queueKey1;
+        key_t       queueKey, queueKey1;
         msgBuffer   queueSendBuffer, queueSendBuffer1;
         
         memset(&queueSendBuffer, '\0', sizeof(queueSendBuffer));
@@ -476,6 +478,8 @@ void createProcessToHandleCacheExpiration(void)
     
     if (childPid == 0)
     {
+        localFileLockSem = dispatch_semaphore_create(1);
+        
         /*  Child Process */
         /*  We check the last modified time of the file and if exceeds the
             timeout value specified, then we delete the file.
@@ -494,17 +498,7 @@ void createProcessToHandleCacheExpiration(void)
         int             queueMsgId = -1, queueMsgId1 = -1;
         msgBuffer       queueBuffer, queueBuffer1;
         
-        
-        char**          cacheBuffer;
-        int             cacheEntryIndex = 0;
         bool            sentFirstMsgRcvdMsg = false;
-        
-        cacheBuffer = (char **)malloc(100*sizeof(char));
-        
-        for (int i = 0; i < 100; i++)
-        {
-            cacheBuffer[i] = (char *)malloc(512*sizeof(char));
-        }
         
         memset(&queueBuffer, '\0', sizeof(queueBuffer));
         memset(&queueBuffer1, '\0', sizeof(queueBuffer1));
@@ -553,23 +547,15 @@ void createProcessToHandleCacheExpiration(void)
                 {
                     printf("Killing process that was created to handle cache expiration\n");
                     
-                    for (int i = 0; i < 100; i++)
-                    {
-                        free(cacheBuffer[i]);
-                    }
-                    free(cacheBuffer);
+                    dispatch_release(localFileLockSem);
+                    //sem_destroy(&localFileLockSem);
                     
                     break;
                 }
                 
-                writeToCacheFile(queueBuffer.msgText, cacheBuffer, cacheEntryIndex);
+                writeToCacheFile(queueBuffer.msgText);
                 
-                //printf("Contents of cache buffer:\n");
-                //for (int i = 0; i < cacheEntryIndex; i++)
-                //{
-                //    printf("%s\n", *(cacheBuffer+i));
-                //}
-                cacheEntryIndex++;
+                //printContentsOfFile();
                 
                 if (false == sentFirstMsgRcvdMsg)
                 {
@@ -589,6 +575,9 @@ void createProcessToHandleCacheExpiration(void)
             
             sleep(2);
         }
+        
+        dispatch_release(localFileLockSem);
+        //sem_destroy(&localFileLockSem);
         
         printf("Killed the process handling cache expiration\n");
         exit(0);
@@ -699,19 +688,30 @@ void createProcessToCheckCacheExpireFile(void)
             FILE *fp = fopen("localDeleteFile.txt", "r");
             while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
             {
+                //printContentsOfFile();
                 //checkIfFileIsToBeDeleted(cacheBuffer[i], &timeInfoStruct[i], &isDeleted);
                 //printf("Checking if file %s needs to be deleted\n", buffer);
-                checkIfFileIsToBeDeleted(buffer, &timeInfo[curIndex], &isDeleted);
-                
-                curIndex++;
-            
-                if (isDeleted == true)
+                if (*buffer != '\0')
                 {
-                    fclose(fp);
-                    deleteEntryFromLocalFile(buffer);
-                    fp = fopen("localDeleteFile.txt", "r");
-                    curIndex--;
+                    checkIfFileIsToBeDeleted(buffer, &timeInfo[curIndex], &isDeleted);
+                    
+                    curIndex++;
+                    
+                    if (isDeleted == true)
+                    {
+                        fclose(fp);
+                        deleteEntryFromLocalFile(buffer);
+                        
+                        //printContentsOfFile();
+                        
+                        fp = fopen("localDeleteFile.txt", "r");
+                        /*  Check if file is empty. If it is, we would have to wait for the trigger
+                         message again from the process handling client request */
+                        curIndex--;
+                    }
                 }
+                
+                memset(buffer, '\0', numBytes);
             }
             fclose(fp);
             
@@ -744,7 +744,27 @@ void signalHandlerForFileDeleteProc(int sig)
     }
 }
 
-void writeToCacheFile(char *file, char **cacheBuffer, int cacheEntryIndex)
+void printContentsOfFile(void)
+{
+    FILE *fpLocalFile = fopen("localDeleteFile.txt", "r");
+    char fileName[512];
+    
+    memset(fileName, '\0', sizeof(fileName));
+    
+    printf("localDeleteFile.txt:: Contents: \n");
+    if (fpLocalFile)
+    {
+        while (fgets(fileName, 512, fpLocalFile))
+        {
+            printf("%s", fileName);
+        }
+        fclose(fpLocalFile);
+    }
+    printf("\n");
+}
+
+//void writeToCacheFile(char *file, char **cacheBuffer, int cacheEntryIndex)
+void writeToCacheFile(char *file)
 {
     char    *buffer;
     size_t  numBytes = 120;
@@ -753,56 +773,48 @@ void writeToCacheFile(char *file, char **cacheBuffer, int cacheEntryIndex)
     
     buffer = (char *)malloc(numBytes*sizeof(char));
     
-    if (cacheEntryIndex != 0)
-    {
-        for (int i = 0; i < cacheEntryIndex; i++)
-        {
-            if (strcmp(*(cacheBuffer+i), file) == 0)
-            {
-                return;
-            }
-        }
-    }
-    
-    printf("Entry %s doesn't exist. Writing to cacheBuffer\n", file);
-    strcpy(*(cacheBuffer+cacheEntryIndex), file);
-    
+    PRINT_DEBUG_MESSAGE("Waiting for lock to write to cache file\n");
+    //sem_wait(&localFileLockSem);
+    dispatch_semaphore_wait(localFileLockSem, DISPATCH_TIME_FOREVER);
+
     FILE *fpDeleteFile = fopen("localDeleteFile.txt", "a");
     char fileWriteBuffer[512];
     
-    for (int i = 0; i < cacheEntryIndex; i++)
+    entryExists = false;
+    
+    memset(fileWriteBuffer, '\0', sizeof(fileWriteBuffer));
+    sprintf(fileWriteBuffer, "%s%c", file, '\n');
+    
+    FILE *fp = fopen("localDeleteFile.txt", "r");
+    if (fp)
     {
-        entryExists = false;
-        
-        memset(fileWriteBuffer, '\0', sizeof(fileWriteBuffer));
-        sprintf(fileWriteBuffer, "%s%c", *(cacheBuffer+i), '\n');
-        
-        FILE *fp = fopen("localDeleteFile.txt", "r");
-        if (fp)
+        while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
         {
-            while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
+            int len = (int)strlen(buffer);
+            buffer[len] = '\0';
+            
+            if(strstr(buffer, file))
             {
-                int len = (int)strlen(buffer);
-                buffer[len] = '\0';
-                
-                if(strstr(buffer, *(cacheBuffer+i)))
-                {
-                    PRINT_DEBUG_MESSAGE("Entry already exists\n");
-                    entryExists = true;
-                    break;
-                }
+                PRINT_DEBUG_MESSAGE("Entry already exists\n");
+                entryExists = true;
+                break;
             }
-            fclose(fp);
         }
-        
-        if (entryExists == false)
-        {
-            fwrite(fileWriteBuffer, sizeof(char), strlen(fileWriteBuffer), fpDeleteFile);
-        }
-        
+        fclose(fp);
+    }
+    
+    if (entryExists == false)
+    {
+        fwrite(fileWriteBuffer, sizeof(char), strlen(fileWriteBuffer), fpDeleteFile);
     }
     
     fclose(fpDeleteFile);
+    
+    dispatch_semaphore_signal(localFileLockSem);
+    //sem_post(&localFileLockSem);
+    PRINT_DEBUG_MESSAGE("Released lock for write to cache file\n");
+    
+    //printContentsOfFile();
     
     return;
 }
@@ -840,23 +852,35 @@ void checkIfFileIsToBeDeleted(char *file, struct _timeInfoStruct_ *timeInfo, boo
     //printf("modifiedTimeCommand: %s\n", modifiedTimeCommand);
     system(modifiedTimeCommand);
     
+    clock_gettime(CLOCK_REALTIME, &curTime);
+    
     FILE *fp = fopen("out.txt", "r");
+    char buffer[512];
+    
+    memset(buffer, '\0', sizeof(buffer));
     if (fp)
     {
-        fscanf(fp, "%ld", &lastModifiedTime);
-        remove("out.txt");
+        fgets(buffer, 512, fp);
         fclose(fp);
+        
+        if (*buffer == '\0')
+        {
+            *deleted = false;
+            return;
+        }
+        else
+        {
+            lastModifiedTime = atol(buffer);
+        }
+        remove("out.txt");
     }
-    
-    clock_gettime(CLOCK_REALTIME, &curTime);
     
     //printf("Current Time: %ld, Last Modified Time: %ld\n", curTime.tv_sec, lastModifiedTime);
     
-    if ((curTime.tv_sec - lastModifiedTime) > 150)
+    if ((curTime.tv_sec - lastModifiedTime) > cacheTimeOut)
     {
-        
-        printf("Its been %ld secs since last time %s was accessed. Deleting the file.\n",
-               (curTime.tv_sec - lastModifiedTime), file);
+        printf("Its been %ld secs since last time %s (timeout = %d) was accessed. Deleting the file.\n",
+               (curTime.tv_sec - lastModifiedTime), file, cacheTimeOut);
         
         if (remove(file) == -1)
         {
@@ -877,19 +901,17 @@ void deleteEntryFromLocalFile(char *lineToMatch)
     FILE    *fpRead = fopen("localDeleteFile.txt", "r");
     FILE    *fpWrite = fopen("localDeleteFile_tmp.txt", "r");
     
-    if (fpWrite)
-    {
-        remove("localDeleteFile_tmp.txt");
-        fclose(fpWrite);
-    }
+    PRINT_DEBUG_MESSAGE("Waiting for lock to delete an entry from cache file\n");
+    //sem_wait(&localFileLockSem);
+    dispatch_semaphore_wait(localFileLockSem, DISPATCH_TIME_FOREVER);
     
     fpWrite = fopen("localDeleteFile_tmp.txt", "w");
     
     char    *buffer;
-    size_t  numBytes = 512;
+    size_t  numBytes = 1024;
     ssize_t bytesRead = -1;
     
-    char bufferCopy[512];
+    char bufferCopy[1024];
     
     buffer = malloc(sizeof(char)*numBytes);
     
@@ -910,6 +932,8 @@ void deleteEntryFromLocalFile(char *lineToMatch)
         {
             fwrite(buffer, sizeof(char), strlen(buffer), fpWrite);
         }
+        
+        memset(buffer, '\0', numBytes);
     }
     
     free(buffer);
@@ -923,6 +947,17 @@ void deleteEntryFromLocalFile(char *lineToMatch)
     sprintf(copySystemCommand, "%s %s %s", "cp", "localDeleteFile_tmp.txt", "localDeleteFile.txt");
     
     system(copySystemCommand);
+    
+    //sem_post(&localFileLockSem);
+    dispatch_semaphore_signal(localFileLockSem);
+    PRINT_DEBUG_MESSAGE("Released lock for delete an entry from cache file\n");
+    
+    FILE *fp = fopen("localDeleteFile_tmp.txt", "r");
+    if (fp)
+    {
+        fclose(fp);
+        remove("localDeleteFile_tmp.txt");
+    }
     
     return;
 }
@@ -1048,13 +1083,13 @@ int handleConnRequest(int connId, char *httpReqMsgBuffer)
     }
     else if (bytes_read == 0)
     {
-        printf("HTTP request message read from socket failed\n");
+        printf("%s:%d:: no data in socket: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
         retVal = -1;
     }
     else
     {
         /* read system call failed */
-        printf("Read system call failed, %d(%s)\n", errno, strerror(errno));
+        printf("%s:%d:: read failed: %s\n", __FUNCTION__,  __LINE__, strerror(errno));
         retVal = -1;
     }
     
@@ -1673,7 +1708,27 @@ void checkIfDirectoryExists(char *dirName)
 
 int sendCachedCopyToClient(int connId, http_req_msg_params clientHttpReqMsgParams, char *hostName)
 {
-    char *fullFilePath = strstr(clientHttpReqMsgParams.httpReqUri, hostName);
+    char *filePath;
+    char fullFilePath[512];
+    
+    char reqUrlCopy[REQ_URL_MAX_LEN];
+    memset(reqUrlCopy, '\0', sizeof(reqUrlCopy));
+    
+    strcpy(reqUrlCopy, clientHttpReqMsgParams.httpReqUri);
+    
+    memset(fullFilePath, '\0', sizeof(fullFilePath));
+    if (strstr(reqUrlCopy, hostName))
+    {
+        filePath = strstr(reqUrlCopy, hostName);
+        strcpy(fullFilePath, filePath);
+    }
+    else
+    {
+        char *filePath;
+        filePath = strstr(reqUrlCopy, "http://");
+        memcpy(filePath, filePath+7, strlen(filePath));
+        sprintf(fullFilePath, "%s/%s", hostName, filePath);
+    }
     char hostNameWithSlash[HOSTNAME_MAX_LEN];
     memset(hostNameWithSlash, '\0', sizeof(hostNameWithSlash));
     
@@ -1736,7 +1791,23 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
     
     strcpy(reqUrlCopy, clientHttpReqMsgParams.httpReqUri);
     
-    char *fullFilePath = strstr(reqUrlCopy, hostName);
+    char *filePath;
+    char fullFilePath[512];
+    
+    memset(fullFilePath, '\0', sizeof(fullFilePath));
+    if (strstr(reqUrlCopy, hostName))
+    {
+        filePath = strstr(reqUrlCopy, hostName);
+        strcpy(fullFilePath, filePath);
+    }
+    else
+    {
+        char *filePath;
+        filePath = strstr(reqUrlCopy, "http://");
+        memcpy(filePath, filePath+7, strlen(filePath));
+        sprintf(fullFilePath, "%s/%s", hostName, filePath);
+    }
+    
     char hostNameWithSlash[HOSTNAME_MAX_LEN];
     memset(hostNameWithSlash, '\0', sizeof(hostNameWithSlash));
     
@@ -1759,12 +1830,12 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
     //printf("fullFilePath: %s\n", fullFilePath);
 
     FILE *fpWtr = NULL;
-    PRINT_DEBUG_MESSAGE("Opening file %s in write mode\n", fullFilePath);
+    //printf("Opening file %s in write mode\n", fullFilePath);
     
     fpWtr = fopen(fullFilePath, "w");
     if (!fpWtr)
     {
-        perror("File Open failed\n");
+        printf("%s:%d:: file open %s failed : %s\n", __FUNCTION__, __LINE__, fullFilePath, strerror(errno));
         return -1;
     }
     
@@ -1800,18 +1871,19 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
     inet_pton(AF_INET, ipAddr, &serverAddr.sin_addr);
     //memcpy(&serverAddr.sin_addr.s_addr, ipAddr, strlen(ipAddr));
     
-    int tcpSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    //int tcpSocket = socket(PF_INET, SOCK_STREAM, 0);
+    //int tcpSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    int tcpSocket = socket(AF_INET, SOCK_STREAM, 0);
     
     if (tcpSocket < 0)
-        printf("Error opening socket\n");
+        printf("%s:%d:: socket creation failed: %s", __FUNCTION__,  __LINE__, strerror(errno));
     
     if (connect(tcpSocket, (struct sockaddr *) &serverAddr, sizeof(serverAddr)) < 0)
-        printf("Error Connecting\n");
+        printf("%s:%d:: connect failed: %s", __FUNCTION__,  __LINE__, strerror(errno));
     
     if (send(tcpSocket, proxyReqToServer, strlen(proxyReqToServer), 0) < 0)
-        printf("Error with send()\n");
+        printf("%s:%d:: send failed: %s", __FUNCTION__,  __LINE__, strerror(errno));
     
+#if 1
     char receiveBuffer[1024];
     memset(receiveBuffer, '\0', sizeof(receiveBuffer));
     
@@ -1826,6 +1898,22 @@ int sendHttpReqMsgToServer(int connId, http_req_msg_params clientHttpReqMsgParam
         memset(receiveBuffer, '\0', sizeof(receiveBuffer));
         recvdBytes = -1;
     }
+#else
+    char receiveBuffer[500*1024];
+    memset(receiveBuffer, '\0', sizeof(receiveBuffer));
+    
+    ssize_t recvdBytes = -1;
+    recvdBytes = recv(tcpSocket, receiveBuffer, sizeof(receiveBuffer) , 0);
+    printf("Received %ld bytes from server\n", recvdBytes);
+    if (recvdBytes != 0)
+    {
+        fwrite(receiveBuffer, sizeof(char), recvdBytes, fpWtr);
+        if (true == sendToClient)
+        {
+            write(connId, receiveBuffer, recvdBytes);
+        }
+    }
+#endif
     printf("Saved contents to file %s\n", fullFilePath);
     
     fclose(fpWtr);
@@ -2008,6 +2096,7 @@ void composeHttpReqMsg(proxy_http_req_msg_params proxyHttpReqMsgParams, char *pr
     return;
 }
 
+#ifdef ENABLE_CACHE_PREFETCHING
 void createProcessForPrefetching(int connId, char *fullFilePath)
 {
     pid_t childPid;
@@ -2043,15 +2132,18 @@ void parseIndexFileForLinks(int connId, char *filePath)
     char    *buffer;
     size_t  numBytes = 256;
     ssize_t bytesRead;
-    char    hrefStr[] = "href=";
+    char    hrefStr[] = "a href=";
+    //char    hrefStr[] = "href=";
     char    quoteDelimiter[] = "\"";
     char    slashDelimiter[] = "/";
     
     char    hostName[HOSTNAME_MAX_LEN];
     char    filePathCopy[FOLDER_NAME_MAX_LEN];
+    char    folderNameToCheck[FOLDER_NAME_MAX_LEN];
     
     memset(hostName, '\0', sizeof(hostName));
     memset(filePathCopy, '\0', sizeof(filePathCopy));
+    memset(folderNameToCheck, '\0', sizeof(folderNameToCheck));
     
     strcpy(filePathCopy, filePath);
     
@@ -2092,29 +2184,62 @@ void parseIndexFileForLinks(int connId, char *filePath)
                         if (token)
                         {
                             token = strtok(NULL, quoteDelimiter);
-                            if (token && (strstr(token, ".htm") || strstr(token, ".html")))
+                            if (token && (strstr(token, ".htm") || strstr(token, ".html") || strstr(token, ".edu")))
                             {
                                 /*  Using the multiprocess approach here -
                                  Creating a new process for every accepted connection
                                  */
                                 int cachedCopyExists = -1;
                                 
-                                strcpy(clientHttpReqMsgParams.httpReqUri, token);
+                                if (strstr(token, hostName))
+                                {
+                                    strcpy(clientHttpReqMsgParams.httpReqUri, token);
+                                    strcpy(folderNameToCheck, token);
+                                }
+                                else if (strstr(token, "http://"))
+                                {
+                                    strcpy(clientHttpReqMsgParams.httpReqUri, token);
+                                    char tokenCopy[512];
+                                    memset(tokenCopy, '\0', sizeof(tokenCopy));
+                                    
+                                    strcpy(tokenCopy, token);
+                                    
+                                    memcpy(tokenCopy, tokenCopy+7, strlen(tokenCopy));
+                                    
+                                    sprintf(folderNameToCheck, "%s/%s", hostName, tokenCopy);
+                                }
+                                else
+                                {
+                                    sprintf(clientHttpReqMsgParams.httpReqUri, "%s%s/%s", "http://", hostName, token);
+                                    sprintf(folderNameToCheck, "%s/%s", hostName, token);
+                                }
+                                
                                 strcpy(clientHttpReqMsgParams.httpReqMethod, "GET");
                                 strcpy(clientHttpReqMsgParams.httpReqVersion, "HTTP/1.1");
                                 
                                 pid_t child_pid = fork();
                                 if (child_pid == 0)
                                 {
-                                    checkIfCachedCopyExists(token, hostName, &cachedCopyExists);
+                                    //printf("Checking if cached copy of %s exists\n", folderNameToCheck);
+                                    checkIfCachedCopyExists(folderNameToCheck, hostName, &cachedCopyExists);
                                     
                                     if (cachedCopyExists != -1)
                                     {
                                         if (cachedCopyExists == 0)
                                         {
-                                            //printf("Call to sendHttpReqMsg with uri %s\n", clientHttpReqMsgParams.httpReqUri);
+                                            PRINT_DEBUG_MESSAGE("Call to sendHttpReqMsg with uri %s\n", clientHttpReqMsgParams.httpReqUri);
                                             sendHttpReqMsgToServer(connId, clientHttpReqMsgParams, hostName, false);
                                         }
+                                            
+                                        char fileNameCopy[FOLDER_NAME_MAX_LEN];
+                                        
+                                        memset(fileNameCopy, '\0', sizeof(fileNameCopy));
+                                        strcpy(fileNameCopy, clientHttpReqMsgParams.httpReqUri);
+                                        
+                                        memcpy(fileNameCopy, fileNameCopy+7, strlen(fileNameCopy)); // Removing http://
+                                        
+                                        PRINT_DEBUG_MESSAGE("Call to prefetchDataForPrefetchedLinks with file %s\n", fileNameCopy);
+                                        prefetchDataForPrefetchedLinks(connId, fileNameCopy, hostName);
                                     }
                                     exit(0);
                                 }
@@ -2135,7 +2260,7 @@ void parseIndexFileForLinks(int connId, char *filePath)
             }
             else
             {
-                printf("File Open failed\n");
+                printf("%s:%d:: file open %s failed : %s\n", __FUNCTION__, __LINE__, filePath, strerror(errno));
                 return;
             }
         }
@@ -2148,6 +2273,154 @@ void parseIndexFileForLinks(int connId, char *filePath)
     
     return;
 }
+
+void prefetchDataForPrefetchedLinks(int connId, char *filePath, char *hostName)
+{
+    FILE    *fp = NULL;
+    char    *buffer;
+    size_t  numBytes = 256;
+    ssize_t bytesRead;
+    char    hrefStr[] = "href=";
+    char    hrefStr1[] = "HREF=";
+    char    imageStr[] = "img src=";
+    
+    buffer = (char *)malloc(numBytes*sizeof(char));
+    
+    if (buffer)
+    {
+        //printf("Opening file %s\n", filePath);
+        fp = fopen(filePath, "r");
+        if (fp)
+        {
+            while((bytesRead = getline(&buffer, &numBytes, fp)) != -1)
+            {
+                int len = (int)strlen(buffer);
+                buffer[len-1] = '\0';
+                
+                prefetchData(connId, filePath, hostName, buffer, hrefStr);
+                
+                prefetchData(connId, filePath, hostName, buffer, hrefStr1);
+                
+                prefetchData(connId, filePath, hostName, buffer, imageStr);
+                
+                memset((char *)buffer, '\0', sizeof(buffer));
+            }
+            fclose(fp);
+        }
+        else
+        {
+            printf("%s:%d:: file open %s failed : %s\n", __FUNCTION__, __LINE__, filePath, strerror(errno));
+            return;
+        }
+        free(buffer);
+    }
+    else
+    {
+        printf("%s:%d:: malloc failed : %s\n", __FUNCTION__, __LINE__, strerror(errno));
+    }
+    
+    return;
+}
+
+void prefetchData(int connId, char *filePath, char *hostName, char *buffer, char *refStr)
+{
+    char    *subStrPtr;
+    char    quoteDelimiter[] = "\"";
+    char    folderNameToCheck[FOLDER_NAME_MAX_LEN];
+    
+    char    filePathCopy[FOLDER_NAME_MAX_LEN];
+    
+    memset(filePathCopy, '\0', sizeof(filePathCopy));
+    memset(folderNameToCheck, '\0', sizeof(folderNameToCheck));
+    
+    strcpy(filePathCopy, filePath);
+    
+    http_req_msg_params clientHttpReqMsgParams;
+    memset(&clientHttpReqMsgParams, '\0', sizeof(http_req_msg_params));
+    
+    if (strstr(buffer, refStr))
+    {
+        subStrPtr = strstr(buffer, refStr);
+        
+        int length = (int)strlen(subStrPtr);
+        char subStrCopy[length+1];
+        memset(subStrCopy, '\0', sizeof(subStrCopy));
+        
+        strcpy(subStrCopy, subStrPtr);
+        
+        char *token = strtok(subStrCopy, quoteDelimiter);
+        if (token)
+        {
+            token = strtok(NULL, quoteDelimiter);
+            //if (token && (strstr(token, ".htm") || strstr(token, ".html")))
+            {
+                //printf("Checking if %s needs to be fetched or not\n", token);
+                if (*token == '/')
+                {
+                    sprintf(clientHttpReqMsgParams.httpReqUri, "%s%s%s", "http://", hostName, token);
+                    sprintf(folderNameToCheck, "%s%s", hostName, token);
+                }
+                else if (strstr(token, "http://"))
+                {
+                    strcpy(clientHttpReqMsgParams.httpReqUri, token);
+                    char tokenCopy[512];
+                    memset(tokenCopy, '\0', sizeof(tokenCopy));
+                    
+                    strcpy(tokenCopy, token);
+                    
+                    memcpy(tokenCopy, tokenCopy+7, strlen(tokenCopy));
+                    
+                    sprintf(folderNameToCheck, "%s/%s", hostName, tokenCopy);
+                }
+                else
+                {
+                    //strcpy(clientHttpReqMsgParams.httpReqUri, token);
+                    //strcpy(folderNameToCheck, token);
+                    
+                    sprintf(clientHttpReqMsgParams.httpReqUri, "%s%s/%s", "http://", hostName, token);
+                    sprintf(folderNameToCheck, "%s/%s", hostName, token);
+                }
+                /*  Using the multiprocess approach here -
+                 Creating a new process for every accepted connection
+                 */
+                int cachedCopyExists = -1;
+                
+                strcpy(clientHttpReqMsgParams.httpReqMethod, "GET");
+                strcpy(clientHttpReqMsgParams.httpReqVersion, "HTTP/1.1");
+                
+                pid_t child_pid = fork();
+                if (child_pid == 0)
+                {
+                    checkIfCachedCopyExists(folderNameToCheck, hostName, &cachedCopyExists);
+                    
+                    if (cachedCopyExists != -1)
+                    {
+                        if (cachedCopyExists == 0)
+                        {
+                            PRINT_DEBUG_MESSAGE("Call to sendHttpReqMsg with uri %s\n", clientHttpReqMsgParams.httpReqUri);
+                            sendHttpReqMsgToServer(connId, clientHttpReqMsgParams, hostName, false);
+                        }
+                        //else
+                        //{
+                        //    printf("Cached copy of %s exists\n", clientHttpReqMsgParams.httpReqUri);
+                        //}
+                    }
+                    exit(0);
+                }
+                else if (child_pid > 0)
+                {
+                    /* Do nothing */
+                }
+                else
+                {
+                    //printf("fork failed, %s\n", strerror(errno));
+                }
+            }
+        }
+    }
+}
+
+#endif
 
 #ifdef ENABLE_CACHE_EXPIRATION
 int sendMsgToCacheExpireQueue(char *filePath)

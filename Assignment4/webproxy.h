@@ -65,8 +65,6 @@ typedef struct _hostNameToIpAddr_
 
 hostNameToIpAddr proxyHostNameToIpAddrStruct;
 
-char *timeoutFifo = "/tmp/timeoutFifo";
-
 bool intSignalReceived;
 /*  Server socket */
 int proxySock;
@@ -87,6 +85,11 @@ typedef struct _timeInfoStruct_
     long lastAccessTime;
     long lastModifiedTime;
 }timeInfoStruct;
+
+dispatch_semaphore_t localFileLockSem;
+//sem_t localFileLockSem;
+
+int cacheTimeOut;
 
 /* HTTP reponse and header */
 
@@ -177,19 +180,22 @@ static int sendMsgToCacheExpireQueue(char *filePath);
 
 
 static int checkIfHostIsBlocked(char *hostName);
-static void parseIndexFileForLinks(int connId, char *filePath);
 static void writeHostNameToIpAddrToLocalFile(char *hostName, char *ipAddress);
 static void checkIpForHostNameInLocalFile(char *hostName, char *ipAddr);
 static void testIpAddress(char *ipAddrToTest, bool *ipAddrWorks);
 
 #ifdef ENABLE_CACHE_EXPIRATION
-static void writeToCacheFile(char *file, char **cacheBuffer, int cacheEntryIndex);
+//static void writeToCacheFile(char *file, char **cacheBuffer, int cacheEntryIndex);
+static void writeToCacheFile(char *file);
 static void checkIfFileIsToBeDeleted(char *file, struct _timeInfoStruct_ *timeInfo, bool *deleted);
 static void deleteEntryFromLocalFile(char *lineToMatch);
 #endif
 
 #ifdef ENABLE_CACHE_PREFETCHING
 static void createProcessForPrefetching(int connId, char *fullFilePath);
+static void parseIndexFileForLinks(int connId, char *filePath);
+static void prefetchDataForPrefetchedLinks(int connId, char *filePath, char *hostName);
+static void prefetchData(int connId, char *filePath, char *hostName, char *buffer, char *refStr);
 #endif
 
 #ifdef ENABLE_CACHE_EXPIRATION
@@ -205,5 +211,8 @@ static void signalHandlerForParent(int sig);
 static void signalHandlerForCacheExpireProc(int sig);
 static void signalHandlerForFileDeleteProc(int sig);
 #endif
+
+
+static void printContentsOfFile(void);
 
 #endif /* webproxy_h */
